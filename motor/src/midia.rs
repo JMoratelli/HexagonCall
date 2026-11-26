@@ -212,7 +212,8 @@ pub enum Envio {
     /// O que a fonte da (o microfone).
     Audio,
     /// Silencio: estamos com a ligacao em espera. Os pacotes seguem indo,
-    /// para o firewall nao fechar, mas sem a voz de quem esta aqui.
+    /// para o firewall nao fechar, mas sem a voz de quem esta aqui; e o que
+    /// chega nao toca (o Asterisk segue mandando o audio do outro lado).
     Silencio,
     /// Nada: o outro lado nos pos em espera (sendonly, inactive).
     Nada,
@@ -226,10 +227,15 @@ struct Rumo {
     envio: Envio,
 }
 
+/// Uma fonte nova esperando o proximo quadro (trocar o microfone no meio da
+/// ligacao).
+type FonteNova = Arc<std::sync::Mutex<Option<Box<dyn Fonte>>>>;
+
 pub struct Sessao {
     cancela: CancellationToken,
     mudo: Arc<AtomicBool>,
     rumo: watch::Sender<Rumo>,
+    fonte_nova: FonteNova,
     tarefa: JoinHandle<Estatistica>,
 }
 
@@ -250,6 +256,7 @@ impl Sessao {
             codec,
             envio: Envio::Audio,
         });
+        let fonte_nova: FonteNova = Arc::default();
         let tarefa = tokio::spawn(laco(
             socket,
             rumo_rx,
@@ -257,12 +264,21 @@ impl Sessao {
             destino,
             cancela.clone(),
             Arc::clone(&mudo),
+            Arc::clone(&fonte_nova),
         ));
         Self {
             cancela,
             mudo,
             rumo,
+            fonte_nova,
             tarefa,
+        }
+    }
+
+    /// Troca o que vai para o outro lado (outro microfone) sem parar a ligacao.
+    pub fn troca_fonte(&self, fonte: Box<dyn Fonte>) {
+        if let Ok(mut f) = self.fonte_nova.lock() {
+            *f = Some(fonte);
         }
     }
 
@@ -316,6 +332,7 @@ async fn laco(
     mut destino: Box<dyn Destino>,
     cancela: CancellationToken,
     mudo: Arc<AtomicBool>,
+    fonte_nova: FonteNova,
 ) -> Estatistica {
     let Rumo {
         mut remoto,
@@ -365,6 +382,12 @@ async fn laco(
                 envio = novo.envio;
             }
             _ = relogio.tick() => {
+                if let Ok(mut f) = fonte_nova.try_lock()
+                    && let Some(nova) = f.take()
+                {
+                    fonte = nova;
+                    fonte_acabou = false;
+                }
                 if fonte_acabou || !fonte.le(&mut quadro) {
                     fonte_acabou = true;
                     quadro = SILENCIO;
@@ -384,7 +407,8 @@ async fn laco(
                 }
                 cabecalho.carimbo = cabecalho.carimbo.wrapping_add(160);
                 let tocado = jitter.retira().unwrap_or(SILENCIO);
-                destino.escreve(&tocado);
+                // Quem pos em espera nao ouve o outro lado.
+                destino.escreve(if envio == Envio::Silencio { &SILENCIO } else { &tocado });
             }
             recebido = socket.recv_from(&mut entrada) => {
                 let Ok((n, de)) = recebido else { continue };

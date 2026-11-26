@@ -61,4 +61,10 @@ fora do git (só na máquina de quem testa). Medido na bancada:
    desde 26/11** (`janela/`): cadastro de conta, discar, atender, recusar, mudo, espera, mensagens, últimas chamadas,
    bandeja, instância única, cores M Calls e Hexagon Call. Os dados ficam em texto, no estilo do GOnnect
    (`~/.config/hexagon-call`: `contas.toml`, `preferencias.toml`, `historico.txt`, `conversas.txt`); a senha no
-   chaveiro, ou em `senhas.toml` (0600) numa máquina sem chaveiro. Falta: usar no dia a dia, a notificação no canto, abrir com o sistema, o arquivo `.desktop` (o ícone da janela no KDE) e o instalador.
+   chaveiro, ou em `senhas.toml` (0600) numa máquina sem chaveiro. Usada no dia a dia desde 26/11 (ligações de
+   verdade, de saída e de entrada). Também em 26/11, a pedido dele: moldura própria (a barra do app é a da janela),
+   ligação chegando na notificação do sistema (Atender e Recusar; no KDE, pelo D-Bus), sons sintetizados (Modernos ou
+   Clássicos: chamando, teclas, fim, mensagem; o toque de entrada ele aprovou), aviso âmbar "Não te ouço" com troca
+   do microfone no meio da ligação (8 s de silêncio absoluto), e a espera sem tocar o outro lado (o Asterisk segue
+   mandando o áudio). Falta: abrir com o sistema, o arquivo `.desktop` (o ícone na barra de tarefas do KDE) e o
+   instalador.

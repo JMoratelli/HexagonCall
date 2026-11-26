@@ -23,7 +23,8 @@ O núcleo foi testado contra um PBX de verdade (Asterisk 13 com chan_sip), e a j
 | Microfone e alto-falante (cpal: ALSA/PipeWire no Linux, WASAPI no Windows), da placa a 48 kHz para os 8 kHz do telefone | ok no PBX, com headset |
 | Sinal de vida (CRLF a cada 20 s) para o firewall não barrar os avisos do PBX | ok |
 | Várias contas no mesmo aparelho | na janela: cada conta é um `Ua` com porta própria |
-| Janela: cadastro de conta, discar, atender, mudo, espera, mensagens, últimas chamadas, bandeja | abre e desenha; falta usar no dia a dia |
+| Janela: cadastro de conta, discar, atender, mudo, espera, mensagens, últimas chamadas, bandeja, moldura própria | em uso no PBX |
+| Ligação chegando na notificação do sistema (Atender, Recusar), sons, aviso de microfone sem som | na janela |
 
 Falta: cancelamento de eco (com caixa de som em vez de headset), DTMF, transferência, a notificação de ligação no
 canto, abrir com o sistema e o instalador. A lista viva fica em `docs/estado.md`.

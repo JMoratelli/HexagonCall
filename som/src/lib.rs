@@ -18,6 +18,8 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, Sample, SampleFormat, SizedSample, StreamConfig};
 use motor::midia::{Destino, Fonte, Quadro};
 use rtrb::{Consumer, Producer, RingBuffer};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 use thiserror::Error;
 use tracing::{debug, info, warn};
 
@@ -120,9 +122,26 @@ pub struct Microfone {
     enchendo: bool,
     folga: usize,
     folga_maxima: usize,
+    silencio: Arc<AtomicU32>,
+}
+
+/// Ha quanto tempo o microfone so manda silencio absoluto (zeros): o que um
+/// headset faz com a haste levantada ou mudo no proprio fio, e o que a placa
+/// entrega quando nao chega nada. A janela avisa "nao te ouco".
+#[derive(Clone, Default)]
+pub struct Medidor(Arc<AtomicU32>);
+
+impl Medidor {
+    pub fn segundos_em_silencio(&self) -> u32 {
+        self.0.load(Ordering::Relaxed) / 50
+    }
 }
 
 impl Microfone {
+    pub fn medidor(&self) -> Medidor {
+        Medidor(Arc::clone(&self.silencio))
+    }
+
     /// `id` da lista de `microfones()`; `None` e o padrao do sistema.
     pub fn abre(id: Option<&str>) -> Result<Self, ErroSom> {
         let dispositivo = escolhe(id, Sentido::Entrada)?;
@@ -150,6 +169,7 @@ impl Microfone {
             enchendo: true,
             folga: amostras_em(taxa, 40),
             folga_maxima: amostras_em(taxa, 120),
+            silencio: Arc::default(),
         })
     }
 }
@@ -182,6 +202,19 @@ where
 
 impl Fonte for Microfone {
     fn le(&mut self, quadro: &mut Quadro) -> bool {
+        self.le_da_placa(quadro);
+        // Um bit de diferenca e o arredondamento da conversao, nao som.
+        if quadro.iter().all(|a| a.unsigned_abs() <= 1) {
+            self.silencio.fetch_add(1, Ordering::Relaxed);
+        } else {
+            self.silencio.store(0, Ordering::Relaxed);
+        }
+        true
+    }
+}
+
+impl Microfone {
+    fn le_da_placa(&mut self, quadro: &mut Quadro) {
         let precisa = self.conversor.precisa();
         let tem = self.fila.slots();
         if tem > precisa + self.folga_maxima {
@@ -195,7 +228,7 @@ impl Fonte for Microfone {
         if (self.enchendo && tem < precisa + self.folga) || tem < precisa {
             self.enchendo = true;
             quadro.fill(0);
-            return true;
+            return;
         }
         self.enchendo = false;
         self.entrada.resize(precisa, 0.0);
@@ -204,7 +237,6 @@ impl Fonte for Microfone {
             debug!("microfone: quadro perdido na conversao");
             quadro.fill(0);
         }
-        true
     }
 }
 

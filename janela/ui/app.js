@@ -9,6 +9,7 @@
 
 const { invoke } = window.__TAURI__.core
 const { listen } = window.__TAURI__.event
+const janela = window.__TAURI__.window.getCurrentWindow()
 
 const $ = s => document.querySelector(s)
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c])
@@ -37,6 +38,8 @@ const ICONS = {
   edit: '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/>',
   trash: '<path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
+  min: '<path d="M6 12h12"/>',
+  x: '<path d="M18 6 6 18M6 6l12 12"/>',
   gear: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>'
 }
 const ic = (n, cls) => '<svg class="' + (cls || 'ic') + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + ICONS[n] + '</svg>'
@@ -112,10 +115,12 @@ function renderChrome () {
     const [t, cor] = REGISTRO[c.registro] || REGISTRO.parada
     status = '<button type="button" class="status" style="--c:' + cor + '" data-act="go" data-v="ajustes" title="' + esc(c.id + ' · ' + t + (c.detalhe ? ': ' + c.detalhe : '')) + '"><span class="dot"></span>' + esc(c.usuario) + (state.contas.length > 1 ? ' +' + (state.contas.length - 1) : '') + '</button>'
   }
-  $('#abar').innerHTML = '<span class="brand">' + MARK + '<span>' + brandName() + '</span></span>' +
+  $('#abar').innerHTML = '<span class="brand" data-tauri-drag-region>' + MARK + '<span>' + brandName() + '</span></span>' +
     '<nav class="segs" aria-label="Abas">' + tabs.map(([v, label, n, tone]) => '<button type="button" class="seg" data-act="go" data-v="' + v + '"' + (state.view === v ? ' aria-current="page"' : '') + '>' + label + (n ? '<span class="n" style="--c:' + tone + '">' + n + '</span>' : '') + '</button>').join('') + '</nav>' +
     status +
-    '<button type="button" class="iconbtn" data-act="gear" aria-label="Configurações" title="Configurações" aria-pressed="' + (state.view === 'ajustes') + '">' + ic('gear') + '</button>'
+    '<button type="button" class="iconbtn" data-act="gear" aria-label="Configurações" title="Configurações" aria-pressed="' + (state.view === 'ajustes') + '">' + ic('gear') + '</button>' +
+    '<span class="wbtns"><button type="button" class="iconbtn ghost sm" data-act="minimizar" aria-label="Minimizar" title="Minimizar">' + ic('min') + '</button>' +
+    '<button type="button" class="iconbtn ghost sm fecha" data-act="fechar" aria-label="Fechar (continua na bandeja)" title="Fechar (continua na bandeja)">' + ic('x') + '</button></span>'
 }
 
 // ---- A faixa da ligacao (nas abas que nao sao Chamadas) ----
@@ -133,7 +138,7 @@ function renderStrip () {
     tx = ic('pout') + '<span class="tx"><b>' + esc(d.n) + '</b> <span>' + esc(c.r) + (c.tocando ? ' · tocando…' : ' · chamando…') + '</span></span>'
     ctl = '<button type="button" class="cbtn hang" data-act="hangup">' + ic('hang') + 'Cancelar</button>'
   } else {
-    tx = ic('phone') + '<span class="tx"><b>' + esc(d.n) + '</b> <span>' + esc(c.r) + (c.held ? ' · em espera' : c.deles ? ' · ' + esc(primeiro(d)) + ' pôs em espera' : '') + '</span></span><span class="strip-timer" id="strip-timer">' + fmt((Date.now() - c.t0) / 1000) + '</span>'
+    tx = ic('phone') + '<span class="tx"><b>' + esc(d.n) + '</b> <span>' + esc(c.r) + (c.held ? ' · em espera' : c.deles ? ' · ' + esc(primeiro(d)) + ' pôs em espera' : '') + '</span>' + (c.semSom ? ' <span class="nao-ouco">não te ouço</span>' : '') + '</span><span class="strip-timer" id="strip-timer">' + fmt((Date.now() - c.t0) / 1000) + '</span>'
     ctl = '<button type="button" class="cbtn" data-act="mute" aria-pressed="' + !!c.muted + '">' + ic(c.muted ? 'micoff' : 'mic') + 'Mudo</button><button type="button" class="cbtn" data-act="go" data-v="chamadas">Abrir</button><button type="button" class="cbtn hang" data-act="hangup">' + ic('hang') + 'Desligar</button>'
   }
   el.innerHTML = tx + ctl
@@ -201,7 +206,10 @@ function callPanel (c) {
     return '<div class="cp">' + who + '<span class="cp-state">' + ic('pout') + (c.tocando ? 'Tocando…' : 'Chamando…') + '</span></div><button type="button" class="hangbtn" data-act="hangup">' + ic('hang') + 'Cancelar</button>'
   }
   const notas = (c.held ? ' · <b>em espera</b>' : '') + (c.deles ? ' · <b>' + esc(primeiro(d)) + ' pôs em espera</b>' : '') + (c.muted ? ' · <b>mudo</b>' : '')
-  return '<div class="cp">' + who + '<div><div class="cp-timer" id="cp-timer">' + fmt((Date.now() - c.t0) / 1000) + '</div><div class="cp-q">' + ic('signal') + esc(c.codec || 'G.711') + ' · 8 kHz' + notas + '</div></div>' +
+  const alerta = c.semSom
+    ? '<div class="alerta" role="status">' + ic('micoff') + '<div><b>Não te ouço</b><span>O microfone está mandando silêncio. Quer testar outro?</span></div><button type="button" class="btn sm" data-act="pick" data-k="microfoneLigacao" data-pop aria-haspopup="dialog" aria-expanded="false" title="Microfone">Trocar</button></div>'
+    : ''
+  return '<div class="cp">' + who + '<div><div class="cp-timer" id="cp-timer">' + fmt((Date.now() - c.t0) / 1000) + '</div><div class="cp-q">' + ic('signal') + esc(c.codec || 'G.711') + ' · 8 kHz' + notas + '</div></div>' + alerta +
     '<div class="cp-grid">' +
     '<button type="button" class="cpb" data-act="mute" aria-pressed="' + !!c.muted + '">' + ic(c.muted ? 'micoff' : 'mic') + 'Mudo</button>' +
     '<button type="button" class="cpb" data-act="hold" aria-pressed="' + !!c.held + '">' + ic('pause') + 'Espera</button></div></div>' +
@@ -370,6 +378,8 @@ function renderAjustes () {
     (state.devErro ? crow('Dispositivos', '', '<span class="erro">' + esc(state.devErro) + '</span>') : '') +
     crow('Microfone', '', pick('microfone', 'Microfone', devs && devs.microfones)) +
     crow('Voz da ligação', 'Onde se ouve quem está do outro lado.', pick('altoFalante', 'Voz da ligação', devs && devs.altoFalantes)) +
+    crow('Sons', 'O chamando, as teclas e os avisos. O toque de quem liga é o mesmo.', '<div class="mseg" role="group" aria-label="Sons">' + [['modernos', 'Modernos'], ['classicos', 'Clássicos']].map(([v, l]) => '<button type="button" data-act="sons" data-v="' + v + '" aria-pressed="' + ((p.sons || 'modernos') === v) + '">' + l + '</button>').join('') + '</div>' +
+      '<button type="button" class="btn sm" data-act="ouvir" data-v="chamando">Ouvir o chamando</button><button type="button" class="btn sm" data-act="ouvir" data-v="toque">Ouvir o toque</button>') +
     '<div class="csec">Janela</div>' +
     crow('Trazer para a frente', 'Quando chega ligação, a janela aparece na frente das outras.', sw('trazerParaFrente', p.trazerParaFrente, 'Trazer a janela para a frente')) +
     crow('Cores', '', '<div class="mseg" role="group" aria-label="Cores">' + [['mcalls', 'M Calls'], ['hexagon', 'Hexagon Call']].map(([v, l]) => '<button type="button" data-act="marca" data-v="' + v + '" aria-pressed="' + (p.marca === v) + '">' + l + '</button>').join('') + '</div>') +
@@ -427,19 +437,43 @@ async function acao (cmd, args, falha) {
   try { await invoke(cmd, args); return true } catch (e) { toast(falha + ': ' + erroDe(e)); return false }
 }
 
-// Toque discreto: duas notas baixas a cada 3 s, so enquanto chama.
-let toque = null
-function comecaToque () {
-  paraToque()
+// ---- Sons ----
+// Sintetizados aqui (WebAudio), sem arquivo de som. O toque de quem liga e o aprovado em 26/11 (duas notas baixas
+// a cada 3 s). "Modernos": o chamando sao dois acordes suaves; "Clássicos": o tom de chamada brasileiro (425 Hz, 1 s
+// ligado e 4 s desligado). As teclas tocam o par de frequencias do DTMF, baixo.
+let audioCtx = null
+function ctxSom () {
   try {
-    const ctx = new AudioContext()
-    const nota = (f, t) => { const o = ctx.createOscillator(), g = ctx.createGain(); o.frequency.value = f; g.gain.setValueAtTime(0, ctx.currentTime + t); g.gain.linearRampToValueAtTime(0.06, ctx.currentTime + t + 0.02); g.gain.linearRampToValueAtTime(0, ctx.currentTime + t + 0.22); o.connect(g).connect(ctx.destination); o.start(ctx.currentTime + t); o.stop(ctx.currentTime + t + 0.25) }
-    const tocar = () => { nota(660, 0); nota(880, 0.28) }
-    tocar()
-    toque = { ctx, t: setInterval(tocar, 3000) }
-  } catch (e) { toque = null }
+    audioCtx = audioCtx || new AudioContext()
+    if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => {})
+    return audioCtx
+  } catch (e) { return null }
 }
-function paraToque () { if (toque) { clearInterval(toque.t); toque.ctx.close().catch(() => {}); toque = null } }
+/** Uma nota (ou acorde): sobe em 15 ms e morre devagar; `plano` segura o volume ate o fim, como o tom classico. */
+function nota (freqs, quando, dur, vol, plano) {
+  const c = ctxSom(); if (!c) return
+  const t = c.currentTime + quando, g = c.createGain()
+  g.gain.setValueAtTime(0, t)
+  g.gain.linearRampToValueAtTime(vol, t + 0.015)
+  if (plano) { g.gain.setValueAtTime(vol, t + dur - 0.02); g.gain.linearRampToValueAtTime(0, t + dur) } else g.gain.exponentialRampToValueAtTime(0.0001, t + dur)
+  g.connect(c.destination)
+  for (const f of [].concat(freqs)) { const o = c.createOscillator(); o.frequency.value = f; o.connect(g); o.start(t); o.stop(t + dur + 0.05) }
+}
+let repeticao = null
+function repete (tocar, cada) { paraSom(); tocar(); repeticao = setInterval(tocar, cada) }
+function paraSom () { if (repeticao) { clearInterval(repeticao); repeticao = null } }
+const DTMF = { 1: [697, 1209], 2: [697, 1336], 3: [697, 1477], 4: [770, 1209], 5: [770, 1336], 6: [770, 1477], 7: [852, 1209], 8: [852, 1336], 9: [852, 1477], '*': [941, 1209], 0: [941, 1336], '#': [941, 1477] }
+const SONS = {
+  toque: () => repete(() => { nota(660, 0, 0.24, 0.06); nota(880, 0.28, 0.24, 0.06) }, 3000),
+  chamando: () => state.prefs.sons === 'classicos'
+    ? repete(() => nota(425, 0, 1, 0.045, true), 5000)
+    : repete(() => { nota([523.25, 659.25], 0, 0.7, 0.03); nota([587.33, 783.99], 0.75, 0.8, 0.026) }, 3200),
+  tecla: k => { if (DTMF[k]) nota(DTMF[k], 0, state.prefs.sons === 'classicos' ? 0.12 : 0.09, state.prefs.sons === 'classicos' ? 0.03 : 0.02, state.prefs.sons === 'classicos') },
+  fim: () => state.prefs.sons === 'classicos'
+    ? [0, 0.35, 0.7].forEach(t => nota(425, t, 0.25, 0.04, true))
+    : (nota(659.25, 0, 0.18, 0.04), nota(440, 0.16, 0.32, 0.04)),
+  mensagem: () => { nota(987.77, 0, 0.14, 0.035); nota(1318.5, 0.08, 0.22, 0.03) }
+}
 
 // ---- Avisos do telefone ----
 function aplica (e) {
@@ -461,15 +495,15 @@ function recebe (a) {
     case 'recebendo':
       if (a.nome) state.nomes[a.ramal] = a.nome
       state.call = { id: a.id, kind: 'incoming', r: a.ramal, conta: a.conta }
-      state.panel = 'call'; comecaToque()
+      state.panel = 'call'; SONS.toque()
       if (state.view === 'chamadas') renderLeft(); renderStrip()
       break
     case 'tocando':
-      if (daChamada(a.id)) { state.call.tocando = true; if (state.view === 'chamadas') renderLeft(); renderStrip() }
+      if (daChamada(a.id) && !state.call.tocando) { state.call.tocando = true; SONS.chamando(); if (state.view === 'chamadas') renderLeft(); renderStrip() }
       break
     case 'atendida':
       if (daChamada(a.id) || (state.call && !state.call.id && state.call.kind === 'outgoing')) {
-        paraToque()
+        paraSom()
         Object.assign(state.call, { id: a.id, kind: 'active', t0: Date.now(), codec: a.codec })
         if (state.view === 'chamadas') renderLeft(); renderStrip()
       }
@@ -477,9 +511,16 @@ function recebe (a) {
     case 'espera':
       if (daChamada(a.id)) { state.call.deles = a.sim; if (state.view === 'chamadas') renderLeft(); renderStrip() }
       break
+    case 'microfone':
+      if (daChamada(a.id)) {
+        state.call.semSom = a.silencio
+        if (a.silencio && !state.devices) carregaDispositivos()
+        if (state.view === 'chamadas') renderLeft(); renderStrip()
+      }
+      break
     case 'encerrada': {
       state.hist.push(a.item)
-      if (daChamada(a.id)) { paraToque(); state.call = null }
+      if (daChamada(a.id)) { const era = state.call.kind; paraSom(); state.call = null; if (era !== 'incoming') SONS.fim() }
       const d = pessoa(a.item.ramal)
       if (perdida(a.item) && state.view !== 'chamadas') state.missedNew++
       toast(perdida(a.item) ? 'Ligação perdida de ' + d.n + '.' : a.item.atendida ? 'Ligação encerrada · ' + fmt(a.item.duracao) : a.item.fim)
@@ -493,7 +534,7 @@ function recebe (a) {
       if (!vendo) state.naoLidas[m.ramal] = (state.naoLidas[m.ramal] || 0) + 1
       renderChrome()
       if (state.view === 'conversas') { if (vendo) { const b = $('#tbody'); if (b) { b.innerHTML = threadHTML(m.ramal); scrollThread() } } renderClist() }
-      if (!vendo) toast(pessoa(m.ramal).n + ': ' + m.texto)
+      if (!vendo) { toast(pessoa(m.ramal).n + ': ' + m.texto); if (!state.call) SONS.mensagem() }
       break
     }
   }
@@ -550,7 +591,7 @@ document.addEventListener('click', async e => {
     case 'open': state.open = v; state.cq = ''; renderView(); renderChrome(); { const t = $('#msg-in'); if (t && finePointer()) t.focus() } break
     case 'msg': state.open = v; go('conversas'); break
     case 'call': startCall(v); break
-    case 'dialkey': state.dial = (state.dial + v).slice(0, 30); { const i = $('#dial-main'); if (i) i.value = state.dial } renderMatch(); focusDial(); break
+    case 'dialkey': SONS.tecla(v); state.dial = (state.dial + v).slice(0, 30); { const i = $('#dial-main'); if (i) i.value = state.dial } renderMatch(); focusDial(); break
     case 'dialback': state.dial = state.dial.slice(0, -1); { const i = $('#dial-main'); if (i) i.value = state.dial } renderMatch(); focusDial(); break
     case 'dialpick': state.dial = v; { const i = $('#dial-main'); if (i) i.value = v } renderMatch(); focusDial(); break
     case 'dialgo': {
@@ -559,9 +600,9 @@ document.addEventListener('click', async e => {
       startCall(t); break
     }
     case 'answer':
-      if (c && c.kind === 'incoming') { paraToque(); if (!await acao('atende', { id: c.id }, 'Não atendi')) comecaToque() }
+      if (c && c.kind === 'incoming') { paraSom(); if (!await acao('atende', { id: c.id }, 'Não atendi')) SONS.toque() }
       break
-    case 'decline': if (c) { paraToque(); await acao('desliga', { id: c.id }, 'Não recusei') } break
+    case 'decline': if (c) { paraSom(); await acao('desliga', { id: c.id }, 'Não recusei') } break
     case 'hangup':
       if (!c) break
       if (!c.id) { toast('Ainda conectando, tente de novo em um instante.'); break }
@@ -586,16 +627,30 @@ document.addEventListener('click', async e => {
       state.prefs[k] = !state.prefs[k]; b.setAttribute('aria-checked', !!state.prefs[k]); salvaPrefs(); break
     }
     case 'marca': state.prefs.marca = v; salvaPrefs(); refresh(); break
+    case 'sons': state.prefs.sons = v; salvaPrefs(); renderView(); break
+    case 'ouvir':
+      if (state.call) { toast('Durante a ligação, não.'); break }
+      SONS[v](); setTimeout(paraSom, v === 'chamando' && state.prefs.sons === 'classicos' ? 1200 : 1600); break
+    case 'minimizar': janela.minimize(); break
+    case 'fechar': janela.close(); break
     case 'pick': {
       const k = b.dataset.k
-      const lista = state.devices ? (k === 'microfone' ? state.devices.microfones : state.devices.altoFalantes) : []
-      const atual = state.prefs[k]
+      const lista = state.devices ? (k === 'altoFalante' ? state.devices.altoFalantes : state.devices.microfones) : []
+      const atual = state.prefs[k === 'microfoneLigacao' ? 'microfone' : k]
       const opcoes = lista.length ? lista : [{ id: null, nome: 'Padrão do sistema' }]
       openPop(b, '<div class="pop-title">' + esc(b.title) + '</div><div role="radiogroup">' +
         opcoes.map(o => '<button type="button" class="opt" role="radio" aria-checked="' + ((o.id === 'alsa:default' && !atual) || o.id === atual) + '" data-act="picked" data-k="' + k + '" data-v="' + esc(o.id || '') + '"><span class="ck">' + ic('check') + '</span><span class="nm">' + esc(o.nome) + '</span></button>').join('') + '</div>', 'pick-' + k)
       break
     }
-    case 'picked': state.prefs[b.dataset.k] = v && v !== 'alsa:default' ? v : null; closePop(); salvaPrefs(); renderView(); break
+    case 'picked': {
+      const k = b.dataset.k, id = v && v !== 'alsa:default' ? v : null
+      closePop()
+      if (k === 'microfoneLigacao') {
+        try { await invoke('troca_microfone', { microfone: id }); state.prefs.microfone = id; toast('Microfone trocado. Fale alguma coisa.') } catch (err) { toast('Não troquei: ' + erroDe(err)) }
+        break
+      }
+      state.prefs[k] = id; salvaPrefs(); renderView(); break
+    }
   }
 })
 document.addEventListener('input', e => {

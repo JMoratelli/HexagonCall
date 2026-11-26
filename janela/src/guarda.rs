@@ -43,6 +43,17 @@ pub enum Marca {
     Hexagon,
 }
 
+/// Os sons do app (sintetizados na tela): o toque de quem liga e o mesmo nos
+/// dois; muda o de chamando, as teclas e os avisos.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Sons {
+    #[default]
+    Modernos,
+    /// O tom de chamada brasileiro: 425 Hz, 1 s ligado e 4 s desligado.
+    Classicos,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Preferencias {
@@ -53,6 +64,7 @@ pub struct Preferencias {
     /// Ligacao chegando traz a janela para a frente (a notificacao no canto
     /// aparece sempre; isto se desliga, pedido de 26/11).
     pub trazer_para_frente: bool,
+    pub sons: Sons,
 }
 
 impl Default for Preferencias {
@@ -62,6 +74,7 @@ impl Default for Preferencias {
             microfone: None,
             alto_falante: None,
             trazer_para_frente: true,
+            sons: Sons::default(),
         }
     }
 }
@@ -509,6 +522,7 @@ mod testes {
             microfone: Some("alsa:default".into()),
             alto_falante: None,
             trazer_para_frente: false,
+            sons: Sons::Classicos,
         };
         g.grava_preferencias(&p).unwrap();
         assert_eq!(g.preferencias(), p);

@@ -7,6 +7,7 @@
 //! ligacao, ela e recusada (486) e entra no historico como perdida.
 
 use crate::guarda::{Guarda, ItemConversa, ItemHistorico, OndeASenha, Preferencias, agora};
+use crate::notificacao::Notificacoes;
 use motor::midia::{Destino, Fonte};
 use motor::{Evento, Opcoes, Registro, Ua};
 use nucleo::conta::Conta;
@@ -17,14 +18,21 @@ use tauri::{AppHandle, Emitter};
 use tokio::sync::mpsc::UnboundedReceiver;
 use tracing::{info, warn};
 
-/// O que vai (microfone) e o que volta (alto-falante) numa ligacao.
-type Audios = (Box<dyn Fonte>, Box<dyn Destino>);
+/// O que vai (microfone) e o que volta (alto-falante) numa ligacao, e o
+/// medidor de silencio do microfone.
+type Audios = (Box<dyn Fonte>, Box<dyn Destino>, som::Medidor);
+
+/// Segundos de silencio absoluto no microfone ate avisar "nao te ouco".
+const SILENCIO_PARA_AVISAR: u32 = 8;
 
 pub struct Telefone {
     app: AppHandle,
     guarda: Guarda,
     linhas: Mutex<Vec<Linha>>,
     chamadas: Mutex<HashMap<String, Chamada>>,
+    notificacoes: Notificacoes,
+    /// O medidor do microfone da ligacao em andamento.
+    medidor: Mutex<Option<som::Medidor>>,
 }
 
 struct Linha {
@@ -54,6 +62,8 @@ struct Chamada {
     atendida: bool,
     inicio: u64,
     atendida_em: Option<u64>,
+    mudo: bool,
+    espera: bool,
 }
 
 /// Uma conta como a tela mostra.
@@ -120,6 +130,11 @@ pub enum Aviso {
         id: String,
         sim: bool,
     },
+    /// O microfone so manda silencio (`silencio`) ou voltou a mandar som.
+    Microfone {
+        id: String,
+        silencio: bool,
+    },
     Encerrada {
         id: String,
         item: ItemHistorico,
@@ -155,6 +170,8 @@ impl Telefone {
             guarda,
             linhas: Mutex::new(Vec::new()),
             chamadas: Mutex::new(HashMap::new()),
+            notificacoes: Notificacoes::default(),
+            medidor: Mutex::new(None),
         })
     }
 
@@ -331,10 +348,14 @@ impl Telefone {
                 Evento::Recebendo { id, de, nome } => self.chegando(&conta, id, de, nome).await,
                 Evento::Tocando { id } => self.avisa(Aviso::Tocando { id }),
                 Evento::Atendida { id, codec } => {
+                    self.notificacoes.fecha(&id);
                     if let Some(c) = trava(&self.chamadas).get_mut(&id) {
                         c.atendida = true;
                         c.atendida_em = Some(agora());
                     }
+                    let tel = Arc::clone(&self);
+                    let vigiada = id.clone();
+                    tauri::async_runtime::spawn(async move { tel.vigia_microfone(vigiada).await });
                     self.avisa(Aviso::Atendida {
                         id,
                         codec: codec.nome().to_string(),
@@ -342,6 +363,7 @@ impl Telefone {
                 }
                 Evento::Espera { id, sim } => self.avisa(Aviso::Espera { id, sim }),
                 Evento::Encerrada { id, fim, .. } => {
+                    self.notificacoes.fecha(&id);
                     let Some(c) = trava(&self.chamadas).remove(&id) else {
                         continue;
                     };
@@ -365,6 +387,30 @@ impl Telefone {
         }
     }
 
+    /// Avisa a tela quando o microfone so manda silencio por um tempo (sem
+    /// mudo e sem espera), e quando volta a mandar som.
+    async fn vigia_microfone(self: Arc<Self>, id: String) {
+        let mut avisado = false;
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            let Some((mudo, espera)) = trava(&self.chamadas).get(&id).map(|c| (c.mudo, c.espera))
+            else {
+                return;
+            };
+            let segundos = trava(&self.medidor)
+                .as_ref()
+                .map_or(0, som::Medidor::segundos_em_silencio);
+            let silencio = !mudo && !espera && segundos >= SILENCIO_PARA_AVISAR;
+            if silencio != avisado {
+                avisado = silencio;
+                self.avisa(Aviso::Microfone {
+                    id: id.clone(),
+                    silencio,
+                });
+            }
+        }
+    }
+
     async fn chegando(&self, conta: &str, id: String, ramal: String, nome: Option<String>) {
         let ocupado = !trava(&self.chamadas).is_empty();
         trava(&self.chamadas).insert(
@@ -377,6 +423,8 @@ impl Telefone {
                 atendida: false,
                 inicio: agora(),
                 atendida_em: None,
+                mudo: false,
+                espera: false,
             },
         );
         if ocupado {
@@ -386,9 +434,18 @@ impl Telefone {
             }
             return;
         }
-        if self.guarda.preferencias().trazer_para_frente {
+        let preferencias = self.guarda.preferencias();
+        if preferencias.trazer_para_frente {
             crate::mostra(&self.app);
         }
+        let quem = nome.clone().unwrap_or_else(|| ramal.clone());
+        self.notificacoes.chegando(
+            &self.app,
+            crate::titulo(preferencias.marca),
+            &id,
+            &quem,
+            &ramal,
+        );
         self.avisa(Aviso::Recebendo {
             id,
             conta: conta.to_string(),
@@ -434,7 +491,28 @@ impl Telefone {
             .map_err(|e| format!("não abri o microfone: {e}"))?;
         let fone = som::AltoFalante::abre(p.alto_falante.as_deref())
             .map_err(|e| format!("não abri o alto-falante: {e}"))?;
-        Ok((Box::new(mic), Box::new(fone)))
+        let medidor = mic.medidor();
+        Ok((Box::new(mic), Box::new(fone), medidor))
+    }
+
+    /// Troca o microfone da ligacao em andamento (o aviso "nao te ouco"
+    /// oferece) e guarda a escolha para as proximas.
+    pub fn troca_microfone(&self, microfone: Option<String>) -> Result<(), String> {
+        let id = trava(&self.chamadas)
+            .iter()
+            .find(|(_, c)| c.atendida)
+            .map(|(id, _)| id.clone())
+            .ok_or("nenhuma ligação em andamento")?;
+        let mic = som::Microfone::abre(microfone.as_deref())
+            .map_err(|e| format!("não abri esse microfone: {e}"))?;
+        let medidor = mic.medidor();
+        self.ua_da_chamada(&id)?
+            .troca_fonte(&id, Box::new(mic))
+            .map_err(|e| e.to_string())?;
+        *trava(&self.medidor) = Some(medidor);
+        let mut p = self.guarda.preferencias();
+        p.microfone = microfone;
+        self.guarda.grava_preferencias(&p)
     }
 
     pub async fn liga(&self, destino: &str, conta: Option<&str>) -> Result<String, String> {
@@ -442,11 +520,12 @@ impl Telefone {
             return Err("já tem uma ligação: desligue antes de ligar de novo".into());
         }
         let (conta, ua) = self.ua_para_ligar(conta)?;
-        let (fonte, saida) = self.audio()?;
+        let (fonte, saida, medidor) = self.audio()?;
         let id = ua
             .liga(destino, fonte, saida)
             .await
             .map_err(|e| e.to_string())?;
+        *trava(&self.medidor) = Some(medidor);
         trava(&self.chamadas).insert(
             id.clone(),
             Chamada {
@@ -457,6 +536,8 @@ impl Telefone {
                 atendida: false,
                 inicio: agora(),
                 atendida_em: None,
+                mudo: false,
+                espera: false,
             },
         );
         Ok(id)
@@ -464,8 +545,12 @@ impl Telefone {
 
     pub async fn atende(&self, id: &str) -> Result<(), String> {
         let ua = self.ua_da_chamada(id)?;
-        let (fonte, saida) = self.audio()?;
-        ua.atende(id, fonte, saida).await.map_err(|e| e.to_string())
+        let (fonte, saida, medidor) = self.audio()?;
+        ua.atende(id, fonte, saida)
+            .await
+            .map_err(|e| e.to_string())?;
+        *trava(&self.medidor) = Some(medidor);
+        Ok(())
     }
 
     pub async fn desliga(&self, id: &str) -> Result<(), String> {
@@ -476,12 +561,20 @@ impl Telefone {
     pub fn mudo(&self, id: &str, sim: bool) -> Result<(), String> {
         self.ua_da_chamada(id)?
             .mudo(id, sim)
-            .map_err(|e| e.to_string())
+            .map_err(|e| e.to_string())?;
+        if let Some(c) = trava(&self.chamadas).get_mut(id) {
+            c.mudo = sim;
+        }
+        Ok(())
     }
 
     pub async fn espera(&self, id: &str, sim: bool) -> Result<(), String> {
         let ua = self.ua_da_chamada(id)?;
-        ua.espera(id, sim).await.map_err(|e| e.to_string())
+        ua.espera(id, sim).await.map_err(|e| e.to_string())?;
+        if let Some(c) = trava(&self.chamadas).get_mut(id) {
+            c.espera = sim;
+        }
+        Ok(())
     }
 
     pub async fn mensagem(

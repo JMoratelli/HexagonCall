@@ -12,6 +12,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod guarda;
+mod notificacao;
 mod telefone;
 
 use guarda::{Guarda, Marca, Preferencias};
@@ -34,7 +35,7 @@ pub fn mostra(app: &AppHandle) {
     }
 }
 
-fn titulo(marca: Marca) -> &'static str {
+pub fn titulo(marca: Marca) -> &'static str {
     match marca {
         Marca::Mcalls => "M Calls",
         Marca::Hexagon => "Hexagon Call",
@@ -71,6 +72,11 @@ fn mudo(t: Tel<'_>, id: String, sim: bool) -> Result<(), String> {
 #[tauri::command]
 async fn espera(t: Tel<'_>, id: String, sim: bool) -> Result<(), String> {
     t.espera(&id, sim).await
+}
+
+#[tauri::command]
+fn troca_microfone(t: Tel<'_>, microfone: Option<String>) -> Result<(), String> {
+    t.troca_microfone(microfone)
 }
 
 #[tauri::command]
@@ -250,6 +256,7 @@ fn main() -> std::process::ExitCode {
             desliga,
             mudo,
             espera,
+            troca_microfone,
             mensagem,
             salva_conta,
             remove_conta,

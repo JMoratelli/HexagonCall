@@ -927,6 +927,17 @@ impl Ua {
         Ok(())
     }
 
+    /// Troca o microfone (a fonte) de uma ligacao em andamento.
+    pub fn troca_fonte(&self, id: &str, fonte: Box<dyn Fonte>) -> Result<(), Erro> {
+        let ligacoes = trava(&self.ligacoes);
+        let sessao = ligacoes
+            .get(id)
+            .and_then(|l| l.sessao.as_ref())
+            .ok_or_else(|| Erro::SemLigacao(id.to_string()))?;
+        sessao.troca_fonte(fonte);
+        Ok(())
+    }
+
     /// Poe a ligacao em espera (`sim`) ou tira dela: re-INVITE com sendonly
     /// ou sendrecv. Em espera vai silencio, nao o microfone, ja a partir daqui.
     pub async fn espera(&self, id: &str, sim: bool) -> Result<(), Erro> {

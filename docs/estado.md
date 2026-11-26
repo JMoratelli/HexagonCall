@@ -21,7 +21,7 @@ O que está validado, o que falta e as decisões tomadas. Atualizar ao fim de ca
   (`JMoratelli/acessos`, `internal/atualizador`):
   - varre a **lista** de releases, e não a marcada como "latest", e fica com a mais nova que tenha pacote para a
     plataforma;
-  - baixa e confere o sha256;
+  - baixa e confere o sha256 (pelo `SHA256SUMS.txt` da release);
   - instala por cima e reabre o app.
   No Linux, o mesmo caminho com a AppImage: baixar, conferir e trocar o arquivo.
 - Base SIP: **rsipstack** (MIT), sem as features de TLS e WebSocket, que o PBX não usa. G.711, RTP, jitter, SDP e
@@ -59,12 +59,41 @@ fora do git (só na máquina de quem testa). Medido na bancada:
 - [x] Ligação de entrada (do Zoiper para o ramal de teste) atendida pelo motor, com áudio nos dois sentidos (893 de 894 tocados, nenhum
   perdido; a fala dele chegou e foi transcrita)
 
+## Validado no Windows (26/11/2026, Windows 10 22H2 numa VM, contra o PBX)
+
+- [x] fmt, clippy `-D warnings` e todos os testes do workspace no Windows (o que o CI do Windows roda, mais o clippy,
+  que pega o código `cfg(windows)`).
+- [x] Bancada: mensagem, presença, registro e uma ligação do ramal de teste para ele mesmo pelo PBX (uma bancada
+  registrada atende, a outra liga): PCMA, áudio nos dois sentidos, cada lado ouviu o tom do outro (440 e 1000 Hz),
+  nenhum pacote perdido.
+- [x] O app: a senha lida do Gerenciador de Credenciais, registro, ligação chegando (atendida pela janela e pelo toast,
+  recusada pelo toast, perdida), ligação de saída, mensagem de ida e volta (acento e emoji), espera, mudo, tons do
+  teclado (os eventos chegam do outro lado pelo Asterisk), instância única, fechar para a bandeja, abrir com o sistema.
+- [x] O toast da ligação com o nome e o ícone do app (antes: "Windows PowerShell"), nos dois flavors, e saindo da tela
+  quando a ligação é atendida ou acaba (antes ficava empilhado, porque o cenário de ligação não some sozinho).
+- [x] Sem microfone e sem alto-falante (a VM não tem placa de som), atender e ligar seguem, com o aviso na tela. Antes o
+  atender falhava (só um aviso de 4 s) e quem ligava ficava tocando.
+- [x] Transferência sem consulta: o chan_sip manda o NOTIFY com o sipfrag "200 OK" e espera o BYE de quem transferiu
+  (RFC 5589), sem derrubar a nossa perna. O motor mandava todo NOTIFY para a presença (481), e a ligação ficava presa
+  na tela. Agora o NOTIFY vai para o diálogo da ligação, e com o 2xx final o app desliga: entra como "transferida".
+- [x] Instalador (Inno Setup, sem administrador): assistente em português, atalho no Menu Iniciar com o AUMID, a
+  conferência do WebView2 (detectou a cópia pela metade da VM: registro dizendo 153, pasta sem o executável) e a
+  desinstalação limpa (contas e histórico ficam).
+- [x] Atualização de ponta a ponta, com um servidor local no lugar da API do GitHub: a 0.1.0 instalada achou a 0.1.1,
+  baixou, conferiu, mostrou a tela de espera do instalador e voltou sozinha na 0.1.1, registrada, em uns 7 s. Recusou
+  hash errado (nada instalado, nada sobrou no disco), não ofereceu release sem `SHA256SUMS.txt`, avisou quando o
+  servidor falhou, recusou atualizar com ligação em andamento; "Depois" esconde a faixa. O download vai para um nome
+  provisório e só vira `HexagonCallSetup-X.Y.Z.exe` depois de conferido (um download ruim não apaga o pacote bom que já
+  estava no `%TEMP%`), e "Atualizar agora" ou "Tentar de novo" lê a lista de novo antes de baixar (a guardada podia
+  trazer o hash velho de uma release corrigida).
+- Na máquina de teste o WebView2 estava quebrado (atualização da Microsoft pela metade); o app abria só com o aviso em
+  inglês do Tauri. Fica para o instalador: ele confere e oferece baixar o oficial.
+
 ## Próximos passos
 
 1. Cancelamento de eco (webrtc-audio-processing, BSD), para quem usa caixa de som. Com headset já dá para usar.
-2. Tons do teclado (DTMF, RFC 4733: 5 pacotes de 20 ms + 3 de fim por tecla) e transferência sem consulta (REFER;
-   o BYE do PBX entra como "transferida") estão no motor e na janela, com teste local. Falta conferir no PBX, junto
-   com a espera (com música de espera ou sem). Transferência com consulta fica para depois.
+2. Tons do teclado (DTMF, RFC 4733: 5 pacotes de 20 ms + 3 de fim por tecla), espera e transferência sem consulta
+   (REFER) conferidos no PBX em 26/11, pelo app no Windows. Transferência com consulta fica para depois.
 3. Puxar os ramais do Asterisk com o nome cadastrado: pelo AMI só de leitura, se o fornecedor do PBX liberar.
 4. A janela em **Tauri** (decisão de 26/11; no molde da Usina, do LinuxMachines: HTML puro, sem bundler). **Visível
    desde 26/11** (`janela/`): cadastro de conta, discar, atender, recusar, mudo, espera, mensagens, últimas chamadas,
@@ -98,4 +127,7 @@ fora do git (só na máquina de quem testa). Medido na bancada:
    troca a conta na hora; a conta aparece na ligação que chega e no histórico quando há mais de uma) e pausar música
    e vídeo ao atender (MPRIS no D-Bus; ao desligar, retoma só o que pausou e continua pausado). No Windows, o mudo
    do sistema e o pause ainda não fazem nada.
-   Falta: o pacote (AppImage, instalador do Windows) com a atualização.
+   Pacote do Windows (26/11): instalador `HexagonCallSetup-X.Y.Z.exe` (`pacote/`), publicado numa tag `vX.Y.Z` pelo
+   workflow Pacote, e a atualização pelo motor do Acessos (`janela/src/atualizador.rs`; a rede pela pilha do Windows).
+   No Windows o toast da ligação usa o AUMID do app (`janela/src/aumid.rs`). Falta: a AppImage do Linux, com a
+   atualização.

@@ -251,6 +251,13 @@ kbd { display: inline-block; padding: 0 5px; border: 1px solid var(--border); bo
 .th-head small { display: flex; align-items: center; gap: 6px; margin-top: 2px; color: var(--muted-fg); font-size: 12px; white-space: nowrap; }
 .th-head .pill { height: 18px; padding: 0 7px; font-size: 11px; }
 .th-head .iconbtn.go { color: var(--go); }
+.atualiza { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 10px; flex-shrink: 0; padding: 8px 10px 8px 12px; font-size: 12.5px; border-bottom: 1px solid color-mix(in srgb, var(--primary) 30%, var(--border)); background: color-mix(in srgb, var(--primary) 9%, var(--card)); }
+.atualiza[hidden] { display: none; }
+.atualiza > .ic { color: var(--primary-text); flex-shrink: 0; }
+.atualiza .tx { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; }
+.atualiza .tx b { font-weight: 600; }
+.atualiza .tx span { color: var(--muted-fg); overflow-wrap: anywhere; }
+.atualiza .atu-barra { width: 140px; }
 .banner { display: flex; gap: 8px; align-items: flex-start; padding: 8px 12px; font-size: 12.5px; border-bottom: 1px solid color-mix(in srgb, var(--warn) 30%, var(--border)); background: linear-gradient(180deg, color-mix(in srgb, var(--warn) 12%, var(--card)), color-mix(in srgb, var(--warn) 5%, var(--card))); }
 .banner .ic { color: var(--warn); margin-top: 1px; }
 .tview { position: relative; flex: 1; min-height: 0; isolation: isolate; background: var(--thread); }

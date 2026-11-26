@@ -9,7 +9,7 @@
 use crate::guarda::{Guarda, ItemConversa, ItemHistorico, OndeASenha, Preferencias, agora};
 use crate::musica::Musica;
 use crate::notificacao::Notificacoes;
-use motor::midia::{Destino, Fonte};
+use motor::midia::{Destino, Fonte, Silencio};
 use motor::{Evento, Opcoes, Registro, Ua};
 use nucleo::conta::Conta;
 use serde::{Deserialize, Serialize};
@@ -20,9 +20,23 @@ use tauri::{AppHandle, Emitter};
 use tokio::sync::mpsc::UnboundedReceiver;
 use tracing::{info, warn};
 
-/// O que vai (microfone) e o que volta (alto-falante) numa ligacao, e o
-/// medidor de silencio do microfone.
-type Audios = (Box<dyn Fonte>, Box<dyn Destino>, som::Medidor);
+/// O que vai (microfone) e o que volta (alto-falante) numa ligacao, o
+/// medidor de silencio do microfone e o que nao abriu. Sem microfone ou sem
+/// alto-falante a ligacao segue em silencio daquele lado, com o aviso na
+/// tela: recusar o atender deixaria quem liga tocando sem resposta.
+struct Audios {
+    fonte: Box<dyn Fonte>,
+    destino: Box<dyn Destino>,
+    medidor: Option<som::Medidor>,
+    faltando: Faltando,
+}
+
+/// O dispositivo que nao abriu, com o motivo.
+#[derive(Debug, Clone, Default)]
+struct Faltando {
+    microfone: Option<String>,
+    alto_falante: Option<String>,
+}
 
 /// Segundos de silencio absoluto no microfone ate avisar "nao te ouco".
 const SILENCIO_PARA_AVISAR: u32 = 8;
@@ -76,6 +90,8 @@ struct Chamada {
     atendida_em: Option<u64>,
     mudo: bool,
     espera: bool,
+    /// Microfone ou alto-falante que nao abriu nesta ligacao.
+    faltando: Faltando,
 }
 
 /// Uma conta como a tela mostra.
@@ -180,6 +196,18 @@ pub enum Aviso {
     Mensagem {
         item: ItemConversa,
     },
+    /// O microfone ou o alto-falante nao abriu: a ligacao segue em silencio
+    /// daquele lado. `None` nos dois e "voltou" (trocou o microfone).
+    SemAudio {
+        id: String,
+        microfone: Option<String>,
+        #[serde(rename = "altoFalante")]
+        alto_falante: Option<String>,
+    },
+    /// Um erro sem tela de origem (o atender pela notificacao).
+    Erro {
+        texto: String,
+    },
 }
 
 /// O cadastro de uma conta, como vem da tela.
@@ -206,12 +234,13 @@ fn trava<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 
 impl Telefone {
     pub fn novo(app: AppHandle, guarda: Guarda) -> Arc<Self> {
+        let flavor = guarda.preferencias().flavor;
         Arc::new(Self {
             app,
             guarda,
             linhas: Mutex::new(Vec::new()),
             chamadas: Mutex::new(HashMap::new()),
-            notificacoes: Notificacoes::default(),
+            notificacoes: Notificacoes::nova(flavor),
             medidor: Mutex::new(None),
             tocador: Mutex::new(None),
             testando: std::sync::atomic::AtomicBool::new(false),
@@ -254,6 +283,16 @@ impl Telefone {
         if let Err(e) = self.app.emit("telefone", aviso) {
             warn!("aviso para a tela: {e}");
         }
+    }
+
+    /// Ha ligacao chegando, tocando ou em andamento.
+    pub fn tem_chamada(&self) -> bool {
+        !trava(&self.chamadas).is_empty()
+    }
+
+    /// Um erro para a tela mostrar, quando nao ha tela esperando a resposta.
+    pub fn avisa_erro(&self, texto: String) {
+        self.avisa(Aviso::Erro { texto });
     }
 
     fn avisa_contas(&self) {
@@ -461,6 +500,7 @@ impl Telefone {
 
     /// Desregistra todas (ao sair do app).
     pub async fn encerra(&self) {
+        self.notificacoes.fecha_todas();
         let uas: Vec<Arc<Ua>> = trava(&self.linhas)
             .iter_mut()
             .filter_map(|l| l.ua.take())
@@ -516,10 +556,21 @@ impl Telefone {
                     let tel = Arc::clone(&self);
                     let vigiada = id.clone();
                     tauri::async_runtime::spawn(async move { tel.vigia_microfone(vigiada).await });
+                    let faltando = trava(&self.chamadas)
+                        .get(&id)
+                        .map(|c| c.faltando.clone())
+                        .unwrap_or_default();
                     self.avisa(Aviso::Atendida {
-                        id,
+                        id: id.clone(),
                         codec: codec.nome().to_string(),
                     });
+                    if faltando.microfone.is_some() || faltando.alto_falante.is_some() {
+                        self.avisa(Aviso::SemAudio {
+                            id,
+                            microfone: faltando.microfone,
+                            alto_falante: faltando.alto_falante,
+                        });
+                    }
                 }
                 Evento::Espera { id, sim } => self.avisa(Aviso::Espera { id, sim }),
                 Evento::Encerrada { id, fim, .. } => {
@@ -550,6 +601,11 @@ impl Telefone {
                         warn!("historico: {e}");
                     }
                     self.avisa(Aviso::Encerrada { id, item });
+                }
+                Evento::TransferenciaFalhou { codigo, .. } => {
+                    self.avisa_erro(format!(
+                        "A transferência não se completou ({codigo}). A ligação continua com você."
+                    ));
                 }
                 Evento::Presenca { .. } | Evento::PresencaEncerrada { .. } => {}
             }
@@ -686,6 +742,7 @@ impl Telefone {
                 atendida_em: None,
                 mudo: false,
                 espera: false,
+                faltando: Faltando::default(),
             },
         );
         if ocupado {
@@ -700,13 +757,7 @@ impl Telefone {
             crate::mostra(&self.app);
         }
         let quem = nome.clone().unwrap_or_else(|| ramal.clone());
-        self.notificacoes.chegando(
-            &self.app,
-            crate::titulo(preferencias.flavor),
-            &id,
-            &quem,
-            &ramal,
-        );
+        self.notificacoes.chegando(&self.app, &id, &quem, &ramal);
         self.toca_o_toque(&preferencias).await;
         self.avisa(Aviso::Recebendo {
             id,
@@ -800,14 +851,35 @@ impl Telefone {
         Ok((l.conta.id(), ua))
     }
 
-    fn audio(&self) -> Result<Audios, String> {
+    fn audio(&self) -> Audios {
         let p = self.guarda.preferencias();
-        let mic = som::Microfone::abre(p.microfone.as_deref())
-            .map_err(|e| format!("não abri o microfone: {e}"))?;
-        let fone = som::AltoFalante::abre(p.alto_falante.as_deref())
-            .map_err(|e| format!("não abri o alto-falante: {e}"))?;
-        let medidor = mic.medidor();
-        Ok((Box::new(mic), Box::new(fone), medidor))
+        let mut faltando = Faltando::default();
+        let (fonte, medidor): (Box<dyn Fonte>, _) =
+            match som::Microfone::abre(p.microfone.as_deref()) {
+                Ok(mic) => {
+                    let medidor = mic.medidor();
+                    (Box::new(mic), Some(medidor))
+                }
+                Err(e) => {
+                    warn!("a ligacao segue sem microfone: {e}");
+                    faltando.microfone = Some(e.to_string());
+                    (Box::new(Silencio), None)
+                }
+            };
+        let destino: Box<dyn Destino> = match som::AltoFalante::abre(p.alto_falante.as_deref()) {
+            Ok(fone) => Box::new(fone),
+            Err(e) => {
+                warn!("a ligacao segue sem alto-falante: {e}");
+                faltando.alto_falante = Some(e.to_string());
+                Box::new(Silencio)
+            }
+        };
+        Audios {
+            fonte,
+            destino,
+            medidor,
+            faltando,
+        }
     }
 
     /// Troca o microfone da ligacao em andamento (o aviso "nao te ouco"
@@ -825,6 +897,19 @@ impl Telefone {
             .troca_fonte(&id, Box::new(mic))
             .map_err(|e| e.to_string())?;
         *trava(&self.medidor) = Some(medidor);
+        let voltou = trava(&self.chamadas).get_mut(&id).and_then(|c| {
+            c.faltando
+                .microfone
+                .take()
+                .map(|_| c.faltando.alto_falante.clone())
+        });
+        if let Some(alto_falante) = voltou {
+            self.avisa(Aviso::SemAudio {
+                id: id.clone(),
+                microfone: None,
+                alto_falante,
+            });
+        }
         let mut p = self.guarda.preferencias();
         p.microfone = microfone;
         self.guarda.grava_preferencias(&p)
@@ -835,12 +920,12 @@ impl Telefone {
             return Err("já tem uma ligação: desligue antes de ligar de novo".into());
         }
         let (conta, ua) = self.ua_para_ligar(conta)?;
-        let (fonte, saida, medidor) = self.audio()?;
+        let a = self.audio();
         let id = ua
-            .liga(destino, fonte, saida)
+            .liga(destino, a.fonte, a.destino)
             .await
             .map_err(|e| e.to_string())?;
-        *trava(&self.medidor) = Some(medidor);
+        *trava(&self.medidor) = a.medidor;
         trava(&self.chamadas).insert(
             id.clone(),
             Chamada {
@@ -853,6 +938,7 @@ impl Telefone {
                 atendida_em: None,
                 mudo: false,
                 espera: false,
+                faltando: a.faltando,
             },
         );
         Ok(id)
@@ -862,11 +948,16 @@ impl Telefone {
         let ua = self.ua_da_chamada(id)?;
         // O toque sai antes de abrir o audio da ligacao (pode ser a mesma saida).
         self.para_o_toque();
-        let (fonte, saida, medidor) = self.audio()?;
-        ua.atende(id, fonte, saida)
+        let a = self.audio();
+        // Antes de atender: o motor avisa "atendida" logo, e o aviso do que
+        // faltou sai junto com ele.
+        if let Some(c) = trava(&self.chamadas).get_mut(id) {
+            c.faltando = a.faltando;
+        }
+        ua.atende(id, a.fonte, a.destino)
             .await
             .map_err(|e| e.to_string())?;
-        *trava(&self.medidor) = Some(medidor);
+        *trava(&self.medidor) = a.medidor;
         Ok(())
     }
 

@@ -11,6 +11,9 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod atualizador;
+#[cfg(windows)]
+mod aumid;
 mod guarda;
 mod musica;
 mod notificacao;
@@ -18,12 +21,14 @@ mod telefone;
 
 use guarda::{Flavor, Guarda, Preferencias};
 use serde::Serialize;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
+use std::time::Duration;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager, State, WindowEvent};
 use telefone::{Estado, FormConta, Telefone};
-use tracing::warn;
+use tracing::{info, warn};
 
 type Tel<'a> = State<'a, Arc<Telefone>>;
 
@@ -227,6 +232,168 @@ fn dispositivos() -> Result<Dispositivos, String> {
     })
 }
 
+// ---- Atualizacao ----
+
+/// A versao nova encontrada (a checagem roda sozinha, ou pelo Sobre) e se a
+/// instalacao ja comecou.
+#[derive(Default)]
+struct Atualizacao {
+    pendente: Mutex<Option<atualizador::Release>>,
+    instalando: AtomicBool,
+}
+
+/// O que chega na tela pelo evento "atualizacao".
+#[derive(Clone, Serialize)]
+#[serde(tag = "tipo", rename_all = "kebab-case")]
+enum AvisoAtualizacao {
+    Disponivel {
+        release: atualizador::Release,
+        atual: String,
+    },
+    Baixando {
+        fracao: f64,
+    },
+    Instalando,
+    Erro {
+        texto: String,
+    },
+}
+
+fn avisa_atualizacao(app: &AppHandle, aviso: AvisoAtualizacao) {
+    use tauri::Emitter;
+    if let Err(e) = app.emit("atualizacao", aviso) {
+        warn!("aviso de atualizacao para a tela: {e}");
+    }
+}
+
+/// Guarda o que a checagem achou e avisa a tela quando ha versao nova.
+fn guarda_checagem(app: &AppHandle, achada: Option<atualizador::Release>) {
+    if let Some(a) = app.try_state::<Atualizacao>() {
+        *a.pendente.lock().unwrap_or_else(PoisonError::into_inner) = achada.clone();
+    }
+    if let Some(release) = achada {
+        info!(tag = %release.tag, "atualizacao disponivel");
+        avisa_atualizacao(
+            app,
+            AvisoAtualizacao::Disponivel {
+                release,
+                atual: atualizador::versao_atual().to_string(),
+            },
+        );
+    }
+}
+
+async fn checa_atualizacao() -> Result<Option<atualizador::Release>, String> {
+    tauri::async_runtime::spawn_blocking(atualizador::checa)
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Checa sozinho: 30 s depois de abrir (a rede do boot ja subiu) e a cada 6
+/// horas, porque o app fica dias aberto na bandeja. Silencioso: sem rede ou
+/// sem versao nova, ninguem fica sabendo.
+fn vigia_atualizacao(app: AppHandle) {
+    if !atualizador::suportado() {
+        return;
+    }
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(Duration::from_secs(30)).await;
+        loop {
+            match checa_atualizacao().await {
+                Ok(achada) => guarda_checagem(&app, achada),
+                Err(e) => info!("checar atualizacao: {e}"),
+            }
+            tokio::time::sleep(Duration::from_secs(6 * 3600)).await;
+        }
+    });
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct InfoAtualizacao {
+    versao: &'static str,
+    suportado: bool,
+    pendente: Option<atualizador::Release>,
+}
+
+#[tauri::command]
+fn atualizacao(a: State<'_, Atualizacao>) -> InfoAtualizacao {
+    InfoAtualizacao {
+        versao: atualizador::versao_atual(),
+        suportado: atualizador::suportado(),
+        pendente: a
+            .pendente
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone(),
+    }
+}
+
+/// "Procurar atualização", no Sobre.
+#[tauri::command]
+async fn procura_atualizacao(app: AppHandle) -> Result<Option<atualizador::Release>, String> {
+    let achada = checa_atualizacao().await?;
+    guarda_checagem(&app, achada.clone());
+    Ok(achada)
+}
+
+/// Baixa, confere e dispara o instalador; depois desregistra as contas e
+/// sai. O instalador reabre o app na versao nova. `false`: ja nao ha versao
+/// nova para instalar.
+#[tauri::command]
+async fn atualiza(app: AppHandle, t: Tel<'_>, a: State<'_, Atualizacao>) -> Result<bool, String> {
+    if t.tem_chamada() {
+        return Err("Termine a ligação antes de atualizar.".into());
+    }
+    if a.instalando.swap(true, Ordering::SeqCst) {
+        return Err("A atualização já está em andamento.".into());
+    }
+    // A lista de novo, e nao a guardada: ela pode ter ficado velha (a release
+    // foi corrigida, ou saiu outra mais nova). Com a guardada, o "Tentar de
+    // novo" depois de um sha256 que nao conferiu repetia o mesmo erro.
+    let rel = match checa_atualizacao().await {
+        Ok(Some(rel)) => rel,
+        Ok(None) => {
+            a.instalando.store(false, Ordering::SeqCst);
+            guarda_checagem(&app, None);
+            return Ok(false);
+        }
+        Err(e) => {
+            a.instalando.store(false, Ordering::SeqCst);
+            return Err(format!("não consegui procurar a atualização: {e}"));
+        }
+    };
+    *a.pendente.lock().unwrap_or_else(PoisonError::into_inner) = Some(rel.clone());
+    let quem_avisa = app.clone();
+    let feito = tauri::async_runtime::spawn_blocking(move || {
+        // Um aviso por ponto percentual, nao um por pedaco baixado.
+        let ultimo = AtomicU32::new(u32::MAX);
+        atualizador::instala(&rel, &|fracao| {
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let pct = (fracao.clamp(0.0, 1.0) * 100.0) as u32;
+            if ultimo.swap(pct, Ordering::Relaxed) != pct {
+                avisa_atualizacao(&quem_avisa, AvisoAtualizacao::Baixando { fracao });
+            }
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())
+    .and_then(|r| r);
+    if let Err(e) = feito {
+        a.instalando.store(false, Ordering::SeqCst);
+        avisa_atualizacao(&app, AvisoAtualizacao::Erro { texto: e.clone() });
+        return Err(e);
+    }
+    avisa_atualizacao(&app, AvisoAtualizacao::Instalando);
+    // O instalador ja esta rodando: sai do PBX direito e das notificacoes, e
+    // deixa o lugar para ele copiar. Cinco segundos bastam ao PBX; sem
+    // resposta, sai assim mesmo.
+    let tel = Arc::clone(&t);
+    let _ = tokio::time::timeout(Duration::from_secs(5), tel.encerra()).await;
+    app.exit(0);
+    Ok(true)
+}
+
 // ---- Bandeja ----
 
 fn bandeja(app: &tauri::App, flavor: Flavor) -> tauri::Result<()> {
@@ -305,6 +472,20 @@ fn main() -> std::process::ExitCode {
             };
             let telefone = Telefone::novo(app.handle().clone(), guarda);
             app.manage(Arc::clone(&telefone));
+            app.manage(Atualizacao::default());
+            // Abrir com o sistema guarda o caminho do exe: depois de mudar de
+            // lugar (do exe solto para o instalado, numa atualizacao), o
+            // caminho velho abriria a versao antiga no proximo login.
+            {
+                use tauri_plugin_autostart::ManagerExt;
+                let auto = app.autolaunch();
+                if auto.is_enabled().unwrap_or(false)
+                    && let Err(e) = auto.enable()
+                {
+                    warn!("atualizar o abrir com o sistema: {e}");
+                }
+            }
+            vigia_atualizacao(app.handle().clone());
             bandeja(app, flavor)?;
             if let Some(w) = app.get_webview_window("principal") {
                 let _ = w.set_title(titulo(flavor));
@@ -347,7 +528,10 @@ fn main() -> std::process::ExitCode {
             remove_conta,
             reconecta,
             salva_preferencias,
-            dispositivos
+            dispositivos,
+            atualizacao,
+            procura_atualizacao,
+            atualiza
         ])
         .build(tauri::generate_context!());
     match resultado {

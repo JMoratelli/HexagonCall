@@ -26,3 +26,10 @@ git config core.hooksPath .githooks
 
 Recursos: `taskset` nos 12 primeiros núcleos, `CARGO_BUILD_JOBS=12` e `nice` (a máquina é de quem trabalha nela).
 O cache de compilação do hook fica em `~/.cache/hexagon-call-prepush`.
+
+## Pacote
+
+`.github/workflows/pacote.yml`, à mão (Actions → Pacote) ou numa tag `vX.Y.Z`. Compila a janela em release no
+Windows e roda `pacote/windows.ps1`: o `HexagonCall.exe`, o instalador `HexagonCallSetup-X.Y.Z.exe` (Inno Setup,
+`pacote/instalador.iss`) e o `SHA256SUMS.txt`. À mão, fica só o artefato (14 dias). Na tag, que tem de ser igual à
+versão do `Cargo.toml`, publica a release com os três arquivos: é ali que o atualizador do app procura.

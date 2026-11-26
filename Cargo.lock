@@ -2234,6 +2234,7 @@ dependencies = [
  "nucleo",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "som",
  "tauri",
  "tauri-build",
@@ -2243,6 +2244,9 @@ dependencies = [
  "toml 1.2.3+spec-1.1.0",
  "tracing",
  "tracing-subscriber",
+ "windows",
+ "windows-future",
+ "windows-registry",
  "zbus 5.19.0",
 ]
 

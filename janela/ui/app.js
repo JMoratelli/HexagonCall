@@ -27,6 +27,7 @@ const ICONS = {
   pmiss: '<path d="' + PHONE + '"/><path d="m22 2-6 6M16 2l6 6"/>',
   hang: '<path transform="rotate(135 12 12)" d="' + PHONE + '"/>',
   search: '<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>',
+  baixar: '<path d="M12 3v12M7 10l5 5 5-5M5 21h14"/>',
   send: '<path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/>',
   mic: MIC,
   micoff: MIC + '<path d="m3 3 18 18"/>',
@@ -66,7 +67,10 @@ const state = {
   temChaveiro: true, pasta: '', hist: [], convs: [], nomes: {}, toques: [],
   call: null, panel: 'call', dial: '', dialT: '', dtmf: '', hseg: 'all', missedNew: 0,
   open: null, cq: '', drafts: {}, naoLidas: {},
-  form: null, remover: null, devices: null, devErro: null, autostart: null
+  form: null, remover: null, devices: null, devErro: null, autostart: null,
+  // A atualizacao: versao instalada, se este sistema atualiza sozinho, a release achada e a fase
+  // (disponivel, baixando, instalando, erro). "Depois" esconde aquela versao por um dia.
+  versao: '', atualizaSozinho: false, atu: null, atuDepois: null, procurando: false
 }
 
 // ---- Pequenos pedacos ----
@@ -240,7 +244,9 @@ function callPanel (c) {
   const outra = (c.alternativas || [])[0]
   const trocar = '<button type="button" class="btn sm" data-act="pick" data-k="microfoneLigacao" data-pop aria-haspopup="dialog" aria-expanded="false" title="Microfone">' + (outra ? 'Outro' : 'Trocar') + '</button>'
   let alerta = ''
-  if (c.semSom && c.micMudo) alerta = '<div class="alerta" role="status">' + ic('micoff') + '<div><b>Seu microfone está mudo</b><span>Está mudo no sistema (ou com o volume em zero).</span></div><button type="button" class="btn sm prim" data-act="tira-do-mudo">Tirar do mudo</button></div>'
+  if (c.semMic) alerta = '<div class="alerta" role="status">' + ic('micoff') + '<div><b>' + (c.semFone ? 'Sem microfone e sem alto-falante' : 'Sem microfone') + '</b><span>' + (c.semFone ? 'Nenhum dispositivo de som abriu: ninguém se ouve. Conecte um headset e escolha o microfone.' : 'Nenhum microfone abriu: o outro lado não te ouve. Conecte um e escolha aqui.') + '</span></div>' + trocar + '</div>'
+  else if (c.semFone) alerta = '<div class="alerta" role="status">' + ic('micoff') + '<div><b>Sem alto-falante</b><span>Nenhuma saída de som abriu: você não ouve o outro lado.</span></div></div>'
+  else if (c.semSom && c.micMudo) alerta = '<div class="alerta" role="status">' + ic('micoff') + '<div><b>Seu microfone está mudo</b><span>Está mudo no sistema (ou com o volume em zero).</span></div><button type="button" class="btn sm prim" data-act="tira-do-mudo">Tirar do mudo</button></div>'
   else if (c.semSom && outra) alerta = '<div class="alerta" role="status">' + ic('micoff') + '<div><b>Não te ouço</b><span>' + esc(outra.nome) + ' está captando som. Usar esse?</span></div><button type="button" class="btn sm prim" data-act="usa-microfone" data-v="' + esc(outra.id) + '">Usar</button>' + trocar + '</div>'
   else if (c.semSom) alerta = '<div class="alerta" role="status">' + ic('micoff') + '<div><b>Não te ouço</b><span>O microfone está mandando silêncio. Quer testar outro?</span></div>' + trocar + '</div>'
   return '<div class="cp">' + who + '<div><div class="cp-timer" id="cp-timer">' + fmt((Date.now() - c.t0) / 1000) + '</div><div class="cp-q">' + ic('signal') + esc(c.codec || 'G.711') + ' · 8 kHz' + notas + '</div></div>' + alerta +
@@ -272,9 +278,12 @@ function incomingPanel (c) {
     '<div class="two"><button type="button" class="hangbtn" data-act="decline">' + ic('hang') + 'Recusar</button><button type="button" class="answerbtn" data-act="answer">' + ic('phone') + 'Atender</button></div>'
 }
 const perdida = h => h.entrada && !h.atendida
+// O texto do fim vem do nucleo (Fim::texto): "Ligação transferida" e o da transferencia que se completou.
+const transferida = h => h.fim === 'Ligação transferida'
 function histTipo (h) {
   if (perdida(h)) return h.fim === 'Ligação recusada' ? 'Recusada' : 'Perdida'
   if (!h.atendida) return 'Não completada'
+  if (transferida(h)) return 'Transferida'
   return h.entrada ? 'Recebida' : 'Feita'
 }
 const histIcone = h => perdida(h) ? ['pmiss', 'var(--crit)'] : h.entrada ? ['pin', 'var(--ok)'] : ['pout', 'var(--info)']
@@ -493,7 +502,8 @@ function secJanela () {
 function secSobre () {
   return cabeca(brandName(), 'Softphone SIP para o computador, com ligações e mensagens.') +
     grupo('', item('Feito por', '', '<span>Jurandir Moratelli</span><span class="muted">@JJMoratelli</span>') +
-      item('Versão', '', '<span class="tab">0.1.0</span>') +
+      item('Versão', state.atualizaSozinho ? 'As versões novas chegam sozinhas: o app avisa e instala quando você mandar.' : '', '<span class="tab">' + esc(state.versao) + '</span>' +
+        (state.atualizaSozinho ? '<button type="button" class="btn sm" data-act="procura-atualizacao"' + (state.procurando ? ' disabled' : '') + '>' + ic('refresh') + (state.procurando ? 'Procurando…' : 'Procurar atualização') + '</button>' : '')) +
       item('Licença', 'Código aberto: github.com/JMoratelli/HexagonCall', '<span>GNU GPL 3</span>') +
       item('Arquivos', 'Contas, preferências, histórico e conversas, em texto. A senha fica no chaveiro do sistema.', '<span class="mono">' + esc(state.pasta) + '</span>'))
 }
@@ -649,12 +659,21 @@ function recebe (a) {
         if (state.view === 'chamadas') renderLeft(); renderStrip()
       }
       break
+    case 'sem-audio':
+      if (daChamada(a.id)) {
+        state.call.semMic = a.microfone
+        state.call.semFone = a.altoFalante
+        if (a.microfone && !state.devices) carregaDispositivos()
+        if (state.view === 'chamadas') renderLeft(); renderStrip()
+      }
+      break
+    case 'erro': toast(a.texto); break
     case 'encerrada': {
       state.hist.push(a.item)
       if (daChamada(a.id)) { const era = state.call.kind; paraSom(); state.call = null; if (era !== 'incoming') SONS.fim() }
       const d = pessoa(a.item.ramal)
       if (perdida(a.item) && state.view !== 'chamadas') state.missedNew++
-      toast(perdida(a.item) ? 'Ligação perdida de ' + d.n + '.' : a.item.atendida ? 'Ligação encerrada · ' + fmt(a.item.duracao) : a.item.fim)
+      toast(perdida(a.item) ? 'Ligação perdida de ' + d.n + '.' : transferida(a.item) ? 'Ligação transferida · ' + fmt(a.item.duracao) : a.item.atendida ? 'Ligação encerrada · ' + fmt(a.item.duracao) : a.item.fim)
       refresh()
       break
     }
@@ -669,6 +688,66 @@ function recebe (a) {
       break
     }
   }
+}
+
+// ---- Atualizacao ----
+const UM_DIA = 24 * 3600 * 1000
+function recebeAtualizacao (a) {
+  switch (a.tipo) {
+    case 'disponivel': {
+      const d = state.atuDepois
+      const mesma = state.atu && state.atu.rel.tag === a.release.tag
+      if (mesma && state.atu.fase !== 'disponivel') break // ja baixando ou instalando
+      if (d && d.tag === a.release.tag && Date.now() - d.quando < UM_DIA) break
+      state.atu = { rel: a.release, fase: 'disponivel', fracao: 0 }
+      break
+    }
+    case 'baixando': if (state.atu) Object.assign(state.atu, { fase: 'baixando', fracao: a.fracao }); break
+    case 'instalando': if (state.atu) state.atu.fase = 'instalando'; break
+    case 'erro': if (state.atu) Object.assign(state.atu, { fase: 'erro', erro: a.texto }); break
+  }
+  renderAtualiza()
+}
+function renderAtualiza () {
+  const el = $('#atualiza'), a = state.atu
+  el.hidden = !a
+  if (!a) { el.innerHTML = ''; return }
+  const v = esc(a.rel.tag.replace(/^v/i, ''))
+  let tx, ctl = ''
+  if (a.fase === 'baixando') {
+    const pct = Math.round((a.fracao || 0) * 100)
+    tx = '<b>Baixando a versão ' + v + '…</b><span class="tab">' + pct + '%</span>'
+    ctl = '<div class="medidor atu-barra" role="progressbar" aria-label="Download da atualização" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + pct + '"><span style="width:' + pct + '%" data-forte="1"></span></div>'
+  } else if (a.fase === 'instalando') {
+    tx = '<b>Instalando a versão ' + v + '…</b><span>O app fecha e abre de novo sozinho.</span>'
+  } else if (a.fase === 'erro') {
+    // Os erros do Rust vem em minuscula e sem ponto ("não baixei a atualização: ..."); alguns ja vem com ponto.
+    let erro = a.erro || ''
+    erro = erro.charAt(0).toUpperCase() + erro.slice(1)
+    if (erro && !/[.!?]$/.test(erro)) erro += '.'
+    tx = '<b>A atualização não foi instalada</b><span>' + esc(erro) + '</span>'
+    ctl = '<button type="button" class="btn sm" data-act="atualiza-depois">Depois</button><button type="button" class="btn sm prim" data-act="atualiza-agora">Tentar de novo</button>'
+  } else {
+    tx = '<b>Versão ' + v + ' disponível</b><span>Você tem a ' + esc(state.versao) + '. Para atualizar, o app fecha e abre de novo.</span>'
+    ctl = '<button type="button" class="btn sm" data-act="atualiza-depois">Depois</button><button type="button" class="btn sm prim" data-act="atualiza-agora">' + ic('baixar') + 'Atualizar agora</button>'
+  }
+  el.innerHTML = ic('baixar') + '<div class="tx">' + tx + '</div>' + ctl
+}
+async function atualizaAgora () {
+  if (state.call) { toast('Termine a ligação antes de atualizar.'); return }
+  Object.assign(state.atu, { fase: 'baixando', fracao: 0, erro: null }); renderAtualiza()
+  try {
+    // false: a lista lida de novo ja nao tem versao mais nova (a faixa era velha).
+    if (await invoke('atualiza') === false) { state.atu = null; renderAtualiza(); toast('Você já está na versão mais nova.') }
+  } catch (e) { if (state.atu) { Object.assign(state.atu, { fase: 'erro', erro: erroDe(e) }); renderAtualiza() } }
+}
+async function procuraAtualizacao () {
+  state.procurando = true; if (state.view === 'ajustes') renderView()
+  try {
+    const r = await invoke('procura_atualizacao')
+    if (r) { state.atuDepois = null; recebeAtualizacao({ tipo: 'disponivel', release: r }) } else toast('Você já está na versão mais nova.')
+  } catch (e) { toast('Não consegui procurar: ' + erroDe(e)) }
+  state.procurando = false; if (state.view === 'ajustes') renderView()
 }
 
 // ---- Popover e aviso ----
@@ -795,6 +874,9 @@ document.addEventListener('click', async e => {
       break
     }
     case 'tema': state.prefs.tema = v; salvaPrefs(); refresh(); break
+    case 'atualiza-agora': await atualizaAgora(); break
+    case 'atualiza-depois': if (state.atu) state.atuDepois = { tag: state.atu.rel.tag, quando: Date.now() }; state.atu = null; renderAtualiza(); break
+    case 'procura-atualizacao': await procuraAtualizacao(); break
     case 'secao': state.secao = v; closePop(); renderView(); { const pane = $('#cfgpane'); if (pane) pane.scrollTop = 0 } break
     case 'ouvir-toque':
       if (state.call) { toast('Durante a ligação, não.'); break }
@@ -889,7 +971,13 @@ setInterval(() => {
 
 async function abre () {
   await listen('telefone', ev => recebe(ev.payload))
+  await listen('atualizacao', ev => recebeAtualizacao(ev.payload))
   try { aplica(await invoke('estado')) } catch (e) { toast('Não li o estado: ' + erroDe(e)) }
+  try {
+    const a = await invoke('atualizacao')
+    state.versao = a.versao; state.atualizaSozinho = a.suportado
+    if (a.pendente) recebeAtualizacao({ tipo: 'disponivel', release: a.pendente })
+  } catch (e) { state.versao = '' }
   if (!state.contas.length) { go('ajustes'); novoForm(null); renderView() } else go('chamadas')
 }
 abre()

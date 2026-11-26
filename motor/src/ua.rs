@@ -10,7 +10,7 @@ use crate::erro::Erro;
 use crate::midia::{Destino, Envio, Estatistica, Fonte, Sessao};
 use crate::rede;
 use nucleo::conta::Conta;
-use nucleo::ligacao::{Fim, fim_por_status};
+use nucleo::ligacao::{Fim, codigo_do_sipfrag, fim_por_status};
 use nucleo::presenca::{self, Presenca};
 use nucleo::sdp::{self, Codec, Direcao, Local, NOSSOS_CODECS, Remota, TIPO_DTMF};
 use rsipstack::EndpointBuilder;
@@ -96,6 +96,12 @@ pub enum Evento {
         id: String,
         fim: Fim,
         estatistica: Option<Estatistica>,
+    },
+    /// O PBX aceitou a transferencia, mas ela nao se completou (o NOTIFY
+    /// trouxe uma falha final): a ligacao segue com quem estava.
+    TransferenciaFalhou {
+        id: String,
+        codigo: u16,
     },
 }
 
@@ -912,7 +918,7 @@ impl Ua {
     /// Desliga: BYE se atendida, CANCEL se ainda tocando do outro lado,
     /// recusa (486) se for uma ligacao chegando.
     pub async fn desliga(&self, id: &str) -> Result<(), Erro> {
-        let (dialogo, sentido, atendida) = {
+        let (dialogo, sentido, atendida, transferida) = {
             let mut ligacoes = trava(&self.ligacoes);
             let l = ligacoes
                 .get_mut(id)
@@ -921,14 +927,20 @@ impl Ua {
                 return Ok(());
             }
             l.por_nos = true;
-            (l.dialogo.clone(), l.sentido, l.atendida)
+            (l.dialogo.clone(), l.sentido, l.atendida, l.transferida)
         };
         match (sentido, atendida) {
             (_, true) => {
                 if let Err(e) = dialogo.bye().await {
                     warn!(%id, "o BYE falhou: {e}");
                 }
-                self.encerra_ligacao(id, Fim::Desligou).await;
+                // O BYE que encerra uma transferencia completa (NOTIFY 200).
+                let fim = if transferida {
+                    Fim::Transferida
+                } else {
+                    Fim::Desligou
+                };
+                self.encerra_ligacao(id, fim).await;
             }
             (Sentido::Saida, false) => {
                 // O fim chega pelo 487 do INVITE (fim_do_convite).
@@ -965,19 +977,77 @@ impl Ua {
                 None => return Err(Erro::SemLigacao(id.to_string())),
             }
         };
-        match dialogo.refer(format!("<{uri}>"), None, None).await? {
-            Some(r) if r.status_code.kind() == StatusCodeKind::Successful => {
-                if let Some(l) = trava(&self.ligacoes).get_mut(id) {
-                    l.transferida = true;
-                }
+        // Marca ANTES de mandar: o chan_sip manda o NOTIFY com o andamento 1 ms
+        // depois do 202, e ele pode ser tratado antes da resposta do REFER.
+        self.marca_transferida(id, true);
+        let resposta = dialogo.refer(format!("<{uri}>"), None, None).await;
+        match resposta {
+            Ok(Some(r)) if r.status_code.kind() == StatusCodeKind::Successful => {
                 info!(%id, destino, "transferencia aceita pelo PBX");
                 Ok(())
             }
-            Some(r) => Err(Erro::Resposta {
-                codigo: r.status_code.code(),
-                motivo: r.status_code.text().to_string(),
-            }),
-            None => Err(Erro::EstadoErrado(id.to_string())),
+            Ok(Some(r)) => {
+                self.marca_transferida(id, false);
+                Err(Erro::Resposta {
+                    codigo: r.status_code.code(),
+                    motivo: r.status_code.text().to_string(),
+                })
+            }
+            Ok(None) => {
+                self.marca_transferida(id, false);
+                Err(Erro::EstadoErrado(id.to_string()))
+            }
+            Err(e) => {
+                self.marca_transferida(id, false);
+                Err(e.into())
+            }
+        }
+    }
+
+    fn marca_transferida(&self, id: &str, sim: bool) {
+        if let Some(l) = trava(&self.ligacoes).get_mut(id)
+            && !l.encerrada
+        {
+            l.transferida = sim;
+        }
+    }
+
+    /// O NOTIFY do REFER (RFC 3515) traz o andamento da transferencia num
+    /// sipfrag ("SIP/2.0 200 OK"). O chan_sip nao derruba a nossa perna quando
+    /// a transferencia da certo: espera o BYE de quem transferiu, como a RFC
+    /// 5589 manda, e a ligacao ficava presa na tela ate alguem desligar (visto
+    /// no PBX em 26/11/2026). Com o 2xx final, desligamos nos (o fim entra como
+    /// "transferida"); com uma falha final, a ligacao segue e a tela fica
+    /// sabendo. O BYE do PBX, quando vem antes, continua valendo.
+    async fn andamento_da_transferencia(&self, call_id: &str, req: &Request) {
+        let evento = valor_de(&req.headers, "Event").unwrap_or_default();
+        if !evento.trim().to_ascii_lowercase().starts_with("refer") {
+            debug!(%evento, "NOTIFY no dialogo");
+            return;
+        }
+        let Some(codigo) = codigo_do_sipfrag(&String::from_utf8_lossy(&req.body)) else {
+            return;
+        };
+        let transferindo = trava(&self.ligacoes)
+            .get(call_id)
+            .is_some_and(|l| l.transferida && !l.encerrada);
+        if !transferindo {
+            return;
+        }
+        if (200..300).contains(&codigo) {
+            info!(id = %call_id, codigo, "transferencia completa: desligando a nossa perna");
+            if let Err(e) = self.desliga(call_id).await {
+                warn!(id = %call_id, "desligar depois da transferencia: {e}");
+            }
+        } else if codigo >= 300 {
+            if let Some(l) = trava(&self.ligacoes).get_mut(call_id) {
+                l.transferida = false;
+            }
+            warn!(id = %call_id, codigo, "a transferencia nao se completou: a ligacao segue");
+            self.avisa(Evento::TransferenciaFalhou {
+                id: call_id.to_string(),
+                codigo,
+            });
         }
     }
 
@@ -1186,9 +1256,12 @@ impl Ua {
             DialogState::Updated(id, req, handle) => {
                 self.renegocia(&id.call_id, &req, handle).await;
             }
+            DialogState::Notify(id, req, handle) => {
+                let _ = handle.reply(StatusCode::OK).await;
+                self.andamento_da_transferencia(&id.call_id, &req).await;
+            }
             DialogState::Info(_, req, handle)
             | DialogState::Options(_, req, handle)
-            | DialogState::Notify(_, req, handle)
             | DialogState::Message(_, req, handle) => {
                 debug!(metodo = %req.method, "pedido no dialogo");
                 let _ = handle.reply(StatusCode::OK).await;
@@ -1307,7 +1380,11 @@ impl Ua {
         match tx.original.method {
             Method::Invite if !no_dialogo => self.recebe_ligacao(tx).await,
             Method::Message if !no_dialogo => self.recebe_mensagem(tx).await,
-            Method::Notify => self.recebe_notify(tx).await,
+            // O NOTIFY de uma transferencia (REFER) e do dialogo da ligacao; o
+            // resto e presenca. Mandar todos para a presenca respondia 481 ao
+            // NOTIFY da transferencia, e o chan_sip derrubava a nossa perna
+            // sem BYE: a ligacao ficava presa na tela (visto em 26/11/2026).
+            Method::Notify if !self.e_de_ligacao(&tx) => self.recebe_notify(tx).await,
             Method::Options if !no_dialogo => Ok(tx.reply(StatusCode::OK).await?),
             _ => match self.dialogos.match_dialog(&tx) {
                 Some(mut dialogo) => Ok(dialogo.handle(&mut tx).await?),
@@ -1315,6 +1392,14 @@ impl Ua {
                 None => Ok(tx.reply(StatusCode::CallTransactionDoesNotExist).await?),
             },
         }
+    }
+
+    /// O pedido e de uma ligacao nossa (pelo Call-ID)?
+    fn e_de_ligacao(&self, tx: &Transaction) -> bool {
+        tx.original
+            .call_id_header()
+            .ok()
+            .is_some_and(|c| trava(&self.ligacoes).contains_key(c.value()))
     }
 
     async fn laco_estados(self: Arc<Self>, mut estados: DialogStateReceiver) {

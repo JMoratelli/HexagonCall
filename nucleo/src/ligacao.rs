@@ -34,6 +34,21 @@ pub const fn fim_por_status(codigo: u16) -> Fim {
     }
 }
 
+/// O codigo do sipfrag que vem no NOTIFY de uma transferencia (RFC 3515):
+/// "SIP/2.0 200 OK" -> 200. A primeira linha basta; o resto, quando vem, sao
+/// cabecalhos da resposta.
+pub fn codigo_do_sipfrag(corpo: &str) -> Option<u16> {
+    let mut partes = corpo.lines().next()?.split_whitespace();
+    if !partes.next()?.eq_ignore_ascii_case("SIP/2.0") {
+        return None;
+    }
+    partes
+        .next()?
+        .parse()
+        .ok()
+        .filter(|c| (100..700).contains(c))
+}
+
 impl Fim {
     pub fn texto(self) -> String {
         match self {
@@ -76,6 +91,20 @@ mod testes {
         assert_eq!(fim_por_status(487), Fim::Cancelada);
         assert_eq!(fim_por_status(408), Fim::SemResposta);
         assert_eq!(fim_por_status(503), Fim::Falha(503));
+    }
+
+    #[test]
+    fn o_sipfrag_do_notify_da_transferencia() {
+        assert_eq!(codigo_do_sipfrag("SIP/2.0 100 Trying\r\n"), Some(100));
+        assert_eq!(codigo_do_sipfrag("SIP/2.0 200 OK"), Some(200));
+        assert_eq!(
+            codigo_do_sipfrag("SIP/2.0 503 Service Unavailable\r\nRetry-After: 5\r\n"),
+            Some(503)
+        );
+        assert_eq!(codigo_do_sipfrag(""), None);
+        assert_eq!(codigo_do_sipfrag("<presence/>"), None);
+        assert_eq!(codigo_do_sipfrag("SIP/2.0 OK"), None);
+        assert_eq!(codigo_do_sipfrag("SIP/2.0 99 Baixo"), None);
     }
 
     #[test]

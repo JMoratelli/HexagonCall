@@ -3,3 +3,4 @@
 *.wav
 /janela/gen
 /.env
+/pacote/saida

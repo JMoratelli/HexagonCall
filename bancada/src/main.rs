@@ -288,6 +288,9 @@ fn mostra(evento: &Evento) {
         }
         Evento::Presenca { ramal, presenca } => format!("{ramal}: {}", presenca.texto()),
         Evento::PresencaEncerrada { ramal } => format!("{ramal}: assinatura encerrada"),
+        Evento::TransferenciaFalhou { codigo, .. } => {
+            format!("a transferencia nao se completou ({codigo}): a ligacao segue")
+        }
         Evento::Recebendo { id, de, nome } => format!(
             "ligacao de {de}{} [{id}]",
             nome.as_ref().map_or(String::new(), |n| format!(" ({n})"))

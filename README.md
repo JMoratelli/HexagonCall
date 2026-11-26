@@ -27,9 +27,10 @@ O núcleo foi testado contra um PBX de verdade (Asterisk 13 com chan_sip), e a j
 | Ligação chegando na notificação do sistema (Atender, Recusar), sons, aviso de microfone sem som | na janela |
 | Tons do teclado na ligação (DTMF, RFC 4733) e transferência (REFER) | nos testes locais |
 | Toques de entrada (cinco), tocar em todos os alto-falantes no volume máximo, abrir com o sistema | na janela |
+| Instalador do Windows e atualização sozinha (releases do GitHub, conferida por sha256) | testado no Windows 10 |
 
-Falta: cancelamento de eco (com caixa de som em vez de headset), transferência com consulta, os ícones dos dois
-flavors e o pacote (AppImage e instalador do Windows, com atualização). A lista viva fica em `docs/estado.md`.
+Falta: cancelamento de eco (com caixa de som em vez de headset), transferência com consulta e a AppImage do Linux,
+com atualização. A lista viva fica em `docs/estado.md`.
 
 ## Como está organizado
 
@@ -41,6 +42,7 @@ motor/    o SIP (rsipstack) e o RTP de verdade. Uma conta, um Ua; quem usa chama
           métodos (liga, atende, desliga, mensagem, assina_presenca) e escuta os eventos.
 bancada/  linha de comando para testar o motor contra um PBX, sem a janela.
 janela/   o app (Tauri 2): src/ em Rust, ui/ com a tela em HTML, CSS e JS puros.
+pacote/   o instalador do Windows (Inno Setup) e o script que gera o pacote.
 docs/     estado do projeto, CI e o protótipo da interface.
 ```
 
@@ -71,6 +73,25 @@ Na primeira vez, abre no cadastro de conta. Os dados ficam em texto, no estilo d
 (no Windows, `%APPDATA%\hexagon-call`): `contas.toml`, `preferencias.toml`, `historico.txt` e `conversas.txt`. A senha
 vai para o chaveiro do sistema (KWallet ou GNOME Keyring; Gerenciador de Credenciais no Windows) e, numa máquina sem
 chaveiro, para `senhas.toml`, que só o próprio usuário lê. "Sair", no menu da bandeja, desregistra as contas.
+
+No Windows a ligação chegando aparece como toast com o nome e o ícone do app (o do flavor): o app registra o próprio
+AppUserModelID no HKCU ao abrir, e o instalador põe o mesmo no atalho do Menu Iniciar. O toast some quando a ligação é
+atendida ou acaba. Sem microfone ou sem alto-falante, a ligação segue em silêncio daquele lado, com o aviso na tela.
+
+## Pacote do Windows e atualização
+
+```powershell
+pwsh pacote/windows.ps1     # HexagonCall.exe, HexagonCallSetup-X.Y.Z.exe e SHA256SUMS.txt em pacote/saida
+```
+
+Precisa do Inno Setup 6. O instalador não pede administrador (vai para `%LOCALAPPDATA%\Programs\HexagonCall`). Uma
+tag `vX.Y.Z`, igual à versão do `Cargo.toml`, faz o workflow Pacote publicar a release com os três arquivos.
+
+O app procura versão nova sozinho (30 s depois de abrir e a cada 6 horas) e também em Ajustes → Sobre. É o motor do
+Atalaia Acessos: varre a lista de releases (não a "latest") e fica com a mais nova que tenha o instalador do Windows,
+baixa, confere o sha256 pelo `SHA256SUMS.txt`, desregistra as contas e roda o instalador em silêncio, que mostra a
+própria tela de espera e reabre o app. Os dois últimos instaladores ficam no `%TEMP%` para voltar à versão anterior à
+mão. `HEXAGON_CALL_RELEASES` troca o endereço da lista (teste com um servidor local).
 
 ## Bancada (teste contra o PBX)
 

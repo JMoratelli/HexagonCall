@@ -462,7 +462,8 @@ function secJanela () {
 }
 function secSobre () {
   return cabeca(brandName(), 'Softphone SIP para o computador, com ligações e mensagens.') +
-    grupo('', item('Versão', '', '<span class="tab">0.1.0</span>') +
+    grupo('', item('Feito por', '', '<span>Jurandir Moratelli</span><span class="muted">@JJMoratelli</span>') +
+      item('Versão', '', '<span class="tab">0.1.0</span>') +
       item('Licença', 'Código aberto: github.com/JMoratelli/HexagonCall', '<span>GNU GPL 3</span>') +
       item('Arquivos', 'Contas, preferências, histórico e conversas, em texto. A senha fica no chaveiro do sistema.', '<span class="mono">' + esc(state.pasta) + '</span>'))
 }

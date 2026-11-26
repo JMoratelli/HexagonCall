@@ -5,7 +5,9 @@
 //! app, nao o da notificacao.
 
 use crate::telefone::Telefone;
-use notify_rust::{Hint, Notification, Timeout, Urgency};
+#[cfg(all(unix, not(target_os = "macos")))]
+use notify_rust::Hint;
+use notify_rust::{Notification, Timeout, Urgency};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError};
 use tauri::{AppHandle, Manager};
@@ -25,10 +27,13 @@ impl Notificacoes {
             .action("default", "Abrir")
             .action("recusar", "Recusar")
             .action("atender", "Atender")
-            .hint(Hint::Category("call.incoming".into()))
-            .hint(Hint::SuppressSound(true))
             .urgency(Urgency::Critical)
             .timeout(Timeout::Never);
+        // Categoria e "sem o som da notificacao" sao do padrao do Linux
+        // (freedesktop); no Windows o toast nao tem.
+        #[cfg(all(unix, not(target_os = "macos")))]
+        n.hint(Hint::Category("call.incoming".into()))
+            .hint(Hint::SuppressSound(true));
         let app = app.clone();
         let id = id.to_string();
         let abertas = Arc::clone(&self.0);

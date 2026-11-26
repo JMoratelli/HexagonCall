@@ -1,9 +1,12 @@
 # Hexagon Call - Copyright (c) 2026 Jurandir Moratelli (@JJMoratelli).
 # O pacote para instalar (docs/estado.md, "Distribuicao e atualizacao"):
-#   - windows: o HexagonCall.exe em release, com o sha256 ao lado;
-#   - (depois) linux: a AppImage, e o instalador do Windows com o atualizador.
-# Roda a mao (Actions > Pacote > Run workflow) ou numa tag de versao (v*). Por
-# enquanto so guarda o resultado como artefato do GitHub (14 dias).
+#   - windows: o instalador HexagonCallSetup-X.Y.Z.exe (Inno Setup,
+#     pacote/instalador.iss), o HexagonCall.exe solto e o SHA256SUMS.txt;
+#   - (depois) linux: a AppImage.
+# A mao (Actions > Pacote > Run workflow): so o artefato do GitHub (14 dias).
+# Numa tag de versao (vX.Y.Z, igual a versao do Cargo.toml): publica a
+# release com os tres anexos, que e onde o atualizador do app procura
+# (janela/src/atualizador.rs: a lista de releases, nao a "latest").
 name: Pacote
 
 on:
@@ -21,6 +24,8 @@ jobs:
   windows:
     runs-on: windows-2025
     timeout-minutes: 60
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v7
 
@@ -31,23 +36,43 @@ jobs:
           rustup toolchain install "$versao" --profile minimal
           rustc --version
 
+      - name: A tag e a versao do Cargo.toml
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          versao="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
+          if [ "${GITHUB_REF_NAME}" != "v${versao}" ]; then
+            echo "a tag ${GITHUB_REF_NAME} nao bate com a versao ${versao} do Cargo.toml" >&2
+            exit 1
+          fi
+
       - uses: Swatinem/rust-cache@v2
         with:
           key: pacote
 
-      - name: Compila a janela (release)
-        run: cargo build --release --locked -p janela
-
-      - name: Junta o exe e o sha256
-        shell: bash
+      - name: Inno Setup
+        shell: pwsh
         run: |
-          mkdir -p saida
-          cp target/release/janela.exe saida/HexagonCall.exe
-          (cd saida && sha256sum HexagonCall.exe > HexagonCall.exe.sha256)
-          cat saida/HexagonCall.exe.sha256
+          if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) {
+            choco install innosetup --no-progress -y
+          }
+
+      - name: Compila e empacota
+        shell: pwsh
+        run: ./pacote/windows.ps1
 
       - uses: actions/upload-artifact@v7
         with:
           name: HexagonCall-windows
-          path: saida/
+          path: pacote/saida/
           retention-days: 14
+
+      - name: Publica a release
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" pacote/saida/* \
+            --title "Hexagon Call ${GITHUB_REF_NAME#v}" \
+            --generate-notes

@@ -78,5 +78,8 @@ fora do git (só na máquina de quem testa). Medido na bancada:
    mandando o áudio). Ainda em 26/11: cinco toques de entrada tocados pelo Rust (`som::toque`), com volume, e a opção
    de tocar em todos os alto-falantes no volume máximo (no Linux, sobe cada saída a 100% e devolve depois; gravado no
    `preferencias.toml`); abrir com o sistema, só na bandeja. No Linux o som vai pelo protocolo do PulseAudio (o
-   PipeWire responde), com buffer de 20 ms; o ALSA cru fica de reserva. Falta: os ícones dos dois flavors e o pacote
-   (AppImage, instalador do Windows) com a atualização.
+   PipeWire responde), com buffer de 20 ms; o ALSA cru fica de reserva. Ainda em 26/11: configurações com menu lateral
+   (Contas, Áudio, Toques e sons, Aparência, Janela, Sobre) e as opções em grupos; "tocar em todos" e "volume máximo"
+   separados; tema Sistema/Claro/Escuro; busca em Ramais. O **flavor** é só pelo arquivo: `flavor = "mcalls"` no
+   `preferencias.toml` liga o M Calls; sem ele, Hexagon Call (um binário só; `marca`, o nome de antes, ainda vale).
+   Falta: os ícones dos dois flavors e o pacote (AppImage, instalador do Windows) com a atualização.

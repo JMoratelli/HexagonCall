@@ -15,7 +15,7 @@ mod guarda;
 mod notificacao;
 mod telefone;
 
-use guarda::{Guarda, Marca, Preferencias};
+use guarda::{Flavor, Guarda, Preferencias};
 use serde::Serialize;
 use std::sync::Arc;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
@@ -35,10 +35,10 @@ pub fn mostra(app: &AppHandle) {
     }
 }
 
-pub fn titulo(marca: Marca) -> &'static str {
-    match marca {
-        Marca::Mcalls => "M Calls",
-        Marca::Hexagon => "Hexagon Call",
+pub fn titulo(flavor: Flavor) -> &'static str {
+    match flavor {
+        Flavor::Mcalls => "M Calls",
+        Flavor::Hexagon => "Hexagon Call",
     }
 }
 
@@ -133,10 +133,12 @@ async fn remove_conta(t: Tel<'_>, id: String) -> Result<Estado, String> {
 }
 
 #[tauri::command]
-fn salva_preferencias(app: AppHandle, t: Tel<'_>, p: Preferencias) -> Result<(), String> {
+fn salva_preferencias(app: AppHandle, t: Tel<'_>, mut p: Preferencias) -> Result<(), String> {
+    // O flavor so muda pelo arquivo: o que a tela manda nao vale.
+    p.flavor = t.guarda().preferencias().flavor;
     t.guarda().grava_preferencias(&p)?;
     if let Some(w) = app.get_webview_window("principal") {
-        let _ = w.set_title(titulo(p.marca));
+        let _ = w.set_title(titulo(p.flavor));
     }
     Ok(())
 }
@@ -189,11 +191,11 @@ fn dispositivos() -> Result<Dispositivos, String> {
 
 // ---- Bandeja ----
 
-fn bandeja(app: &tauri::App, marca: Marca) -> tauri::Result<()> {
+fn bandeja(app: &tauri::App, flavor: Flavor) -> tauri::Result<()> {
     let abrir = MenuItem::with_id(
         app,
         "abrir",
-        format!("Abrir o {}", titulo(marca)),
+        format!("Abrir o {}", titulo(flavor)),
         true,
         None::<&str>,
     )?;
@@ -205,7 +207,7 @@ fn bandeja(app: &tauri::App, marca: Marca) -> tauri::Result<()> {
         .ok_or_else(|| tauri::Error::InvalidIcon(std::io::Error::other("sem icone")))?;
     TrayIconBuilder::with_id("hexagon-call")
         .icon(icone)
-        .tooltip(titulo(marca))
+        .tooltip(titulo(flavor))
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, ev| match ev.id().as_ref() {
@@ -250,7 +252,7 @@ fn main() -> std::process::ExitCode {
         }
     };
     let na_bandeja = std::env::args().any(|a| a == "--bandeja");
-    let marca = guarda.preferencias().marca;
+    let flavor = guarda.preferencias().flavor;
     let mut guarda = Some(guarda);
 
     let resultado = tauri::Builder::default()
@@ -267,9 +269,9 @@ fn main() -> std::process::ExitCode {
             };
             let telefone = Telefone::novo(app.handle().clone(), guarda);
             app.manage(Arc::clone(&telefone));
-            bandeja(app, marca)?;
+            bandeja(app, flavor)?;
             if let Some(w) = app.get_webview_window("principal") {
-                let _ = w.set_title(titulo(marca));
+                let _ = w.set_title(titulo(flavor));
             }
             if !na_bandeja {
                 mostra(app.handle());

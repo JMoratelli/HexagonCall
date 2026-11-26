@@ -466,7 +466,7 @@ impl Telefone {
         let quem = nome.clone().unwrap_or_else(|| ramal.clone());
         self.notificacoes.chegando(
             &self.app,
-            crate::titulo(preferencias.marca),
+            crate::titulo(preferencias.flavor),
             &id,
             &quem,
             &ramal,
@@ -486,8 +486,9 @@ impl Telefone {
         let toque = p.toque.clone();
         let onde = onde_tocar(p);
         let intensidade = intensidade(p.volume_toque);
+        let maximo = p.toque_no_maximo;
         let aberto = tauri::async_runtime::spawn_blocking(move || {
-            som::toque::Tocador::toca(&toque, &onde, intensidade)
+            som::toque::Tocador::toca(&toque, &onde, intensidade, maximo)
         })
         .await;
         match aberto {
@@ -513,8 +514,9 @@ impl Telefone {
         let p = self.guarda.preferencias();
         let onde = onde_tocar(&p);
         let intensidade = intensidade(p.volume_toque);
+        let maximo = p.toque_no_maximo;
         tauri::async_runtime::spawn_blocking(move || {
-            let tocador = som::toque::Tocador::toca(&toque, &onde, intensidade)?;
+            let tocador = som::toque::Tocador::toca(&toque, &onde, intensidade, maximo)?;
             std::thread::sleep(std::time::Duration::from_secs(3));
             drop(tocador);
             Ok::<(), som::ErroSom>(())

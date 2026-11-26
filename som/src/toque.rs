@@ -3,10 +3,11 @@
 //! Os toques sao sintetizados aqui, sem arquivo de som: notas com subida curta
 //! e queda suave, repetidas a cada `periodo`.
 //!
-//! "Tocar em todos, no volume maximo" (opcional, pedido de 26/11): toca em
-//! todas as saidas e, no Linux, sobe cada uma a 100% e tira o mudo enquanto
-//! toca, devolvendo o volume de antes quando para (pactl, do PipeWire ou do
-//! PulseAudio). No Windows, por enquanto, so o volume cheio do proprio toque.
+//! Duas opcoes separadas (pedido de 26/11): "tocar em todos os
+//! alto-falantes" e "volume maximo". O maximo, no Linux, sobe a 100% e tira o
+//! mudo das saidas que tocam enquanto toca, e devolve o volume de antes
+//! quando para (pactl, do PipeWire ou do PulseAudio). No Windows, por
+//! enquanto, so o volume cheio do proprio toque.
 
 use crate::{ErroSom, configuracao_de_saida, saida, todas_as_saidas};
 use cpal::traits::{DeviceTrait, StreamTrait};
@@ -98,7 +99,7 @@ pub fn toques() -> Vec<Toque> {
         },
         Toque {
             id: "antigo",
-            nome: "Telefone antigo",
+            nome: "Campainha",
             periodo: 6.0,
             notas: campainha,
         },
@@ -146,7 +147,7 @@ pub fn amostra(toque: &Toque, t: f32) -> f32 {
 pub enum Onde {
     /// Um alto-falante (o id da lista; None e o padrao do sistema).
     Um(Option<String>),
-    /// Todas as saidas, no volume maximo.
+    /// Todas as saidas.
     Todas,
 }
 
@@ -157,16 +158,21 @@ pub struct Tocador {
 }
 
 impl Tocador {
-    /// `intensidade` de 0 a 1 (o volume do toque nas preferencias).
-    pub fn toca(id: &str, onde: &Onde, intensidade: f32) -> Result<Self, ErroSom> {
+    /// `intensidade` de 0 a 1 (o volume do toque nas preferencias); com
+    /// `maximo`, o toque vai cheio e as saidas sobem a 100% enquanto toca.
+    pub fn toca(id: &str, onde: &Onde, intensidade: f32, maximo: bool) -> Result<Self, ErroSom> {
         let toque = Arc::new(toque(id));
-        let (dispositivos, amplitude, volumes) = match onde {
+        let (dispositivos, saidas) = match onde {
             Onde::Um(d) => (
                 vec![saida(d.as_deref())?],
-                intensidade.clamp(0.0, 1.0),
-                Vec::new(),
+                volume::nome_da_saida(d.as_deref()),
             ),
-            Onde::Todas => (todas_as_saidas(), 0.9, volume::sobe_todas()),
+            Onde::Todas => (todas_as_saidas(), volume::todas()),
+        };
+        let (amplitude, volumes) = if maximo {
+            (0.9, volume::sobe(&saidas))
+        } else {
+            (intensidade.clamp(0.0, 1.0), Vec::new())
         };
         let mut fluxos = Vec::new();
         for d in &dispositivos {
@@ -265,13 +271,35 @@ mod volume {
             .then(|| String::from_utf8_lossy(&saida.stdout).into_owned())
     }
 
+    /// O nome da saida para o pactl: o id do PulseAudio sem o prefixo, ou a
+    /// saida padrao. Um id do ALSA cru nao tem como mexer no volume.
+    pub fn nome_da_saida(id: Option<&str>) -> Vec<String> {
+        match id {
+            None => vec!["@DEFAULT_SINK@".into()],
+            Some(id) => id
+                .strip_prefix("pulseaudio:")
+                .map(|n| vec![n.to_string()])
+                .unwrap_or_default(),
+        }
+    }
+
     #[cfg(target_os = "linux")]
-    pub fn sobe_todas() -> Vec<Antes> {
-        let Some(lista) = pactl(&["list", "short", "sinks"]) else {
-            return Vec::new();
-        };
+    pub fn todas() -> Vec<String> {
+        pactl(&["list", "short", "sinks"])
+            .map(|lista| {
+                lista
+                    .lines()
+                    .filter_map(|l| l.split('\t').nth(1))
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    #[cfg(target_os = "linux")]
+    pub fn sobe(saidas: &[String]) -> Vec<Antes> {
         let mut antes = Vec::new();
-        for nome in lista.lines().filter_map(|l| l.split('\t').nth(1)) {
+        for nome in saidas.iter().map(String::as_str) {
             let volume = pactl(&["get-sink-volume", nome]).and_then(|v| porcentagem(&v));
             let mudo = pactl(&["get-sink-mute", nome])
                 .is_some_and(|m| m.contains("yes") || m.contains("sim"));
@@ -297,7 +325,12 @@ mod volume {
     }
 
     #[cfg(not(target_os = "linux"))]
-    pub fn sobe_todas() -> Vec<Antes> {
+    pub fn todas() -> Vec<String> {
+        Vec::new()
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    pub fn sobe(_saidas: &[String]) -> Vec<Antes> {
         Vec::new()
     }
 
@@ -335,6 +368,19 @@ mod testes {
         // Entre as notas e o proximo periodo, silencio.
         assert_eq!(amostra(&t, 1.5), 0.0);
         assert!(amostra(&t, 0.05).abs() > 0.0);
+    }
+
+    #[test]
+    fn nome_da_saida_para_o_pactl() {
+        assert_eq!(
+            volume::nome_da_saida(None),
+            vec!["@DEFAULT_SINK@".to_string()]
+        );
+        assert_eq!(
+            volume::nome_da_saida(Some("pulseaudio:alsa_output.usb-x.analog-stereo")),
+            vec!["alsa_output.usb-x.analog-stereo".to_string()]
+        );
+        assert!(volume::nome_da_saida(Some("alsa:sysdefault:CARD=X")).is_empty());
     }
 
     #[test]

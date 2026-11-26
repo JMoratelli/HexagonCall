@@ -33,14 +33,27 @@ pub enum OndeASenha {
     Arquivo,
 }
 
+/// O flavor: um binario so, e a personalizacao liga pelo arquivo de texto
+/// (`flavor = "mcalls"` no preferencias.toml, decisao de 26/11), sem
+/// compilar duas vezes. Sem nada, e o Hexagon Call.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum Marca {
-    /// O flavor de uso interno: vermelho.
-    #[default]
-    Mcalls,
+pub enum Flavor {
     /// O nome do produto: verde.
+    #[default]
     Hexagon,
+    /// O de uso interno: vermelho.
+    Mcalls,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Tema {
+    /// O que o sistema usa (claro ou escuro).
+    #[default]
+    Sistema,
+    Claro,
+    Escuro,
 }
 
 /// Os sons do app (sintetizados na tela): o toque de quem liga e o mesmo nos
@@ -57,7 +70,10 @@ pub enum Sons {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Preferencias {
-    pub marca: Marca,
+    /// So pelo arquivo; a tela nao muda. `marca` era o nome de antes.
+    #[serde(alias = "marca")]
+    pub flavor: Flavor,
+    pub tema: Tema,
     /// O id da lista de dispositivos; None e o padrao do sistema.
     pub microfone: Option<String>,
     pub alto_falante: Option<String>,
@@ -69,14 +85,17 @@ pub struct Preferencias {
     pub toque: String,
     /// De 0 a 100.
     pub volume_toque: u8,
-    /// Tocar em todos os alto-falantes, no volume maximo (opcional, 26/11).
+    /// Tocar em todos os alto-falantes (opcional, 26/11).
     pub toque_em_todos: bool,
+    /// Subir as saidas ao volume maximo enquanto toca (separado do "todos").
+    pub toque_no_maximo: bool,
 }
 
 impl Default for Preferencias {
     fn default() -> Self {
         Self {
-            marca: Marca::default(),
+            flavor: Flavor::default(),
+            tema: Tema::default(),
             microfone: None,
             alto_falante: None,
             trazer_para_frente: true,
@@ -84,6 +103,7 @@ impl Default for Preferencias {
             toque: "colmeia".into(),
             volume_toque: 50,
             toque_em_todos: false,
+            toque_no_maximo: false,
         }
     }
 }
@@ -178,7 +198,10 @@ impl Guarda {
 
     pub fn grava_preferencias(&self, p: &Preferencias) -> Result<(), String> {
         let corpo = toml::to_string(p).map_err(|e| e.to_string())?;
-        let texto = format!("# Preferencias do Hexagon Call (gravadas pelo app).\n\n{corpo}");
+        let texto = format!(
+            "# Preferencias do Hexagon Call (gravadas pelo app).\n\
+             # flavor = \"mcalls\" liga o M Calls (vermelho); \"hexagon\" e o padrao.\n\n{corpo}"
+        );
         grava_inteiro(&self.arquivo("preferencias.toml"), &texto, false)
     }
 
@@ -527,7 +550,8 @@ mod testes {
         let g = Guarda::em(&pasta_de_teste("prefs"));
         assert_eq!(g.preferencias(), Preferencias::default());
         let p = Preferencias {
-            marca: Marca::Hexagon,
+            flavor: Flavor::Mcalls,
+            tema: Tema::Escuro,
             microfone: Some("alsa:default".into()),
             alto_falante: None,
             trazer_para_frente: false,
@@ -535,8 +559,24 @@ mod testes {
             toque: "marimba".into(),
             volume_toque: 80,
             toque_em_todos: true,
+            toque_no_maximo: false,
         };
         g.grava_preferencias(&p).unwrap();
         assert_eq!(g.preferencias(), p);
+    }
+
+    #[test]
+    fn marca_de_antes_vira_flavor() {
+        let g = Guarda::em(&pasta_de_teste("marca"));
+        fs::write(
+            g.pasta().join("preferencias.toml"),
+            "marca = \"mcalls\"\nsons = \"modernos\"\n",
+        )
+        .unwrap();
+        assert_eq!(g.preferencias().flavor, Flavor::Mcalls);
+        fs::write(g.pasta().join("preferencias.toml"), "flavor = \"mcalls\"\n").unwrap();
+        assert_eq!(g.preferencias().flavor, Flavor::Mcalls);
+        fs::write(g.pasta().join("preferencias.toml"), "sons = \"modernos\"\n").unwrap();
+        assert_eq!(g.preferencias().flavor, Flavor::Hexagon);
     }
 }

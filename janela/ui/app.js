@@ -47,6 +47,7 @@ const ICONS = {
   janela: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18"/>',
   info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/>',
   play: '<path d="M7 4.5v15l12-7.5z"/>',
+  refresh: '<path d="M21 12a9 9 0 1 1-2.64-6.36L21 8"/><path d="M21 3v5h-5"/>',
   min: '<path d="M6 12h12"/>',
   x: '<path d="M18 6 6 18M6 6l12 12"/>',
   gear: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>'
@@ -411,7 +412,8 @@ function secContas () {
   const linhas = state.contas.map(c => {
     const d = { r: c.usuario, n: c.nome || c.usuario, conhecido: !!c.nome, h: hue(c.usuario) }
     const linha = '<div class="conta">' + av(d) + '<div class="tx"><b>' + esc(c.usuario) + (c.nome ? ' · ' + esc(c.nome) : '') + '</b><small><span class="mono">' + esc(c.dominio) + (c.porta !== 5060 ? ':' + c.porta : '') + '</span>' + regPill(c) + '<span>' + senhaOnde(c) + '</span></small></div>' +
-      '<div class="acts"><button type="button" class="iconbtn sm" data-act="edita-conta" data-v="' + esc(c.id) + '" aria-label="Editar ' + esc(c.id) + '" title="Editar">' + ic('edit') + '</button>' +
+      '<div class="acts">' + (['falhou', 'parada'].includes(c.registro) ? '<button type="button" class="iconbtn sm" data-act="reconecta" data-v="' + esc(c.id) + '" aria-label="Reconectar ' + esc(c.id) + '" title="Reconectar">' + ic('refresh') + '</button>' : '') +
+      '<button type="button" class="iconbtn sm" data-act="edita-conta" data-v="' + esc(c.id) + '" aria-label="Editar ' + esc(c.id) + '" title="Editar">' + ic('edit') + '</button>' +
       '<button type="button" class="iconbtn sm" data-act="remove-conta" data-v="' + esc(c.id) + '" aria-label="Remover ' + esc(c.id) + '" title="Remover">' + ic('trash') + '</button></div></div>'
     const confirma = state.remover === c.id
       ? '<div class="confirma" role="alert"><span>Remover a conta <b>' + esc(c.id) + '</b>? Ela sai do registro e a senha é apagada. O histórico fica.</span><button type="button" class="btn" data-act="remove-cancela">Cancelar</button><button type="button" class="btn perigo" data-act="remove-confirma" data-v="' + esc(c.id) + '">Remover</button></div>'
@@ -717,6 +719,7 @@ document.addEventListener('click', async e => {
     case 'form-cancela': state.form = null; renderView(); break
     case 'remove-conta': state.form = null; state.remover = v; renderView(); break
     case 'remove-cancela': state.remover = null; renderView(); break
+    case 'reconecta': b.disabled = true; if (await acao('reconecta', { id: v }, 'Não reconectei')) toast('Conectando de novo ao PBX…'); break
     case 'remove-confirma':
       try { aplica(await invoke('remove_conta', { id: v })); toast('Conta removida.') } catch (err) { toast('Não removi: ' + erroDe(err)) }
       state.remover = null; refresh(); break

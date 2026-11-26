@@ -215,6 +215,8 @@ pub struct Ua {
     eventos: mpsc::UnboundedSender<Evento>,
     udp: UdpConnection,
     servidor: SipAddr,
+    /// O PBX resolvido: para ver se o caminho ate ele mudou (outra rede).
+    pbx: SocketAddr,
     ip: IpAddr,
     aor: Uri,
     contato: Uri,
@@ -368,6 +370,7 @@ impl Ua {
             eventos,
             udp,
             servidor: SipAddr::from(destino),
+            pbx: destino,
             ip,
             aor,
             contato,
@@ -404,6 +407,23 @@ impl Ua {
     /// O endereco local (IP e porta SIP) desta conta.
     pub fn endereco(&self) -> String {
         self.contato.host_with_port.to_string()
+    }
+
+    /// O IP local com que esta conta se anunciou ao PBX (o do Contact).
+    pub fn ip(&self) -> IpAddr {
+        self.ip
+    }
+
+    /// O IP que o sistema usaria agora para chegar ao PBX (None: sem rota,
+    /// rede fora). Diferente de `ip()`, a rede mudou e a conta tem de subir de
+    /// novo. Nao manda pacote nenhum.
+    pub fn ip_para_o_pbx(&self) -> Option<IpAddr> {
+        rede::ip_local_para(self.pbx).ok()
+    }
+
+    /// Ha ligacao em andamento ou chegando.
+    pub fn em_ligacao(&self) -> bool {
+        trava(&self.ligacoes).values().any(|l| !l.encerrada)
     }
 
     fn avisa(&self, evento: Evento) {
@@ -1392,6 +1412,20 @@ impl Ua {
         let tarefa = trava(&self.tarefa_registro).take();
         if let Some(t) = tarefa {
             let _ = tokio::time::timeout(Duration::from_secs(5), t).await;
+        }
+        self.cancela.cancel();
+    }
+
+    /// Sai sem desregistrar: a rede mudou (ou o computador voltou da
+    /// suspensao) e a conta vai subir de novo. O REGISTER da nova substitui o
+    /// contato; um desregistro daqui (Expires 0) apagaria, no chan_sip, o
+    /// registro do ramal inteiro, inclusive o novo.
+    pub async fn abandona(&self) {
+        self.registrado.store(false, Ordering::Relaxed);
+        self.cancela_registro.cancel();
+        let tarefa = trava(&self.tarefa_registro).take();
+        if let Some(t) = tarefa {
+            let _ = tokio::time::timeout(Duration::from_secs(2), t).await;
         }
         self.cancela.cancel();
     }

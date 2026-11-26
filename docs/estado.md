@@ -82,4 +82,11 @@ fora do git (só na máquina de quem testa). Medido na bancada:
    (Contas, Áudio, Toques e sons, Aparência, Janela, Sobre) e as opções em grupos; "tocar em todos" e "volume máximo"
    separados; tema Sistema/Claro/Escuro; busca em Ramais. O **flavor** é só pelo arquivo: `flavor = "mcalls"` no
    `preferencias.toml` liga o M Calls; sem ele, Hexagon Call (um binário só; `marca`, o nome de antes, ainda vale).
+   **Volta sozinha** (26/11): um vigia a cada 5 s sobe a conta de novo quando o computador volta da suspensão (o
+   relógio do motor para enquanto ele dorme, e o registro vencia no PBX), quando o IP para chegar ao PBX muda ou a
+   rede cai e volta, e a cada 30 s quando a conta nem subiu ou o PBX não respondeu (o app aberto antes da rede, no
+   boot). Recusa de senha não se repete sozinha (o fail2ban do PBX bloquearia o IP). A conta velha sai sem
+   desregistrar (`Ua::abandona`): no chan_sip, um Expires 0 apagaria também o registro novo. Com ligação em
+   andamento, depois que ela acabar. "Reconectar" na conta faz o mesmo à mão. Falta conferir de verdade: suspender
+   o computador e trocar de rede com o app aberto.
    Falta: os ícones dos dois flavors e o pacote (AppImage, instalador do Windows) com a atualização.

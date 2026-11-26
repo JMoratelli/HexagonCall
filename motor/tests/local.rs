@@ -470,3 +470,29 @@ async fn registra_e_desregistra() {
         "{e:?}"
     );
 }
+
+#[tokio::test]
+async fn abandonar_nao_desregistra() {
+    // A rede mudou: a conta sobe de novo e o REGISTER novo substitui o
+    // contato. Um desregistro da velha (Expires 0) apagaria, no chan_sip, o
+    // registro do ramal inteiro, inclusive o novo.
+    let (servidor, _c) = servidor_com_senha("certa").await;
+    let (ua, mut r) = ua_no_servidor(servidor, "certa", true).await;
+    let e = espera(&mut r, |e| matches!(e, Evento::Registro(_))).await;
+    assert!(
+        matches!(e, Evento::Registro(Registro::Registrado { .. })),
+        "{e:?}"
+    );
+    ua.abandona().await;
+    let depois = tokio::time::timeout(Duration::from_millis(800), async {
+        loop {
+            match r.recv().await {
+                Some(Evento::Registro(Registro::Desregistrado)) => return true,
+                Some(_) => {}
+                None => return false,
+            }
+        }
+    })
+    .await;
+    assert!(!matches!(depois, Ok(true)), "abandonar mandou desregistro");
+}

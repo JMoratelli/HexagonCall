@@ -12,8 +12,9 @@ use motor::midia::{Destino, Fonte};
 use motor::{Evento, Opcoes, Registro, Ua};
 use nucleo::conta::Conta;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::time::{Duration, Instant, SystemTime};
 use tauri::{AppHandle, Emitter};
 use tokio::sync::mpsc::UnboundedReceiver;
 use tracing::{info, warn};
@@ -42,6 +43,10 @@ struct Linha {
     ua: Option<Arc<Ua>>,
     registro: EstadoRegistro,
     detalhe: Option<String>,
+    /// A ultima falha foi de rede (sem resposta do PBX), nao uma recusa: so
+    /// essa se tenta de novo sozinha. Recusa de senha repetida faz o
+    /// fail2ban do PBX bloquear o IP.
+    falha_de_rede: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -190,8 +195,10 @@ impl Telefone {
         &self.guarda
     }
 
-    /// Le as contas do disco e liga cada uma.
+    /// Le as contas do disco, liga cada uma e fica vigiando a rede.
     pub async fn comeca(self: &Arc<Self>) {
+        let tel = Arc::clone(self);
+        tauri::async_runtime::spawn(async move { tel.vigia_rede().await });
         let contas = match self.guarda.contas() {
             Ok(c) => c,
             Err(e) => {
@@ -206,6 +213,7 @@ impl Telefone {
                 ua: None,
                 registro: EstadoRegistro::Iniciando,
                 detalhe: None,
+                falha_de_rede: false,
             })
             .collect();
         self.avisa_contas();
@@ -275,9 +283,20 @@ impl Telefone {
     }
 
     fn marca_linha(&self, id: &str, registro: EstadoRegistro, detalhe: Option<String>) {
+        self.marca_linha_com(id, registro, detalhe, false);
+    }
+
+    fn marca_linha_com(
+        &self,
+        id: &str,
+        registro: EstadoRegistro,
+        detalhe: Option<String>,
+        falha_de_rede: bool,
+    ) {
         if let Some(l) = trava(&self.linhas).iter_mut().find(|l| l.conta.id() == id) {
             l.registro = registro;
             l.detalhe = detalhe;
+            l.falha_de_rede = falha_de_rede;
         }
         self.avisa_contas();
     }
@@ -308,7 +327,96 @@ impl Telefone {
                 let tel = Arc::clone(self);
                 tauri::async_runtime::spawn(async move { tel.escuta(id, eventos).await });
             }
-            Err(e) => self.marca_linha(&id, EstadoRegistro::Falhou, Some(e.to_string())),
+            // Nem subiu: em geral, sem rede ou sem DNS (app aberto antes da rede).
+            Err(e) => self.marca_linha_com(&id, EstadoRegistro::Falhou, Some(e.to_string()), true),
+        }
+    }
+
+    /// Sobe a conta de novo, sem desregistrar a velha (ver `Ua::abandona`).
+    async fn religa_conta(self: &Arc<Self>, id: &str) {
+        let (ua, conta) = {
+            let mut linhas = trava(&self.linhas);
+            let Some(l) = linhas.iter_mut().find(|l| l.conta.id() == id) else {
+                return;
+            };
+            (l.ua.take(), l.conta.clone())
+        };
+        if let Some(ua) = ua {
+            ua.abandona().await;
+        }
+        self.marca_linha(id, EstadoRegistro::Iniciando, None);
+        self.liga_conta(conta).await;
+    }
+
+    /// "Reconectar", na tela.
+    pub async fn reconecta(self: &Arc<Self>, id: &str) -> Result<(), String> {
+        if self.ua_da_conta(id).is_some_and(|ua| ua.em_ligacao()) {
+            return Err("a conta está numa ligação: reconecta quando ela acabar".into());
+        }
+        self.religa_conta(id).await;
+        Ok(())
+    }
+
+    /// A cada 5 s: o computador voltou da suspensao (o relogio do motor para
+    /// enquanto ele dorme, e o registro vence no PBX), a rede mudou (o IP para
+    /// chegar ao PBX nao e o anunciado), caiu e voltou, ou a conta nem subiu
+    /// (app aberto antes da rede, no boot). Em qualquer caso, a conta sobe de
+    /// novo; com ligacao em andamento, depois que ela acabar.
+    async fn vigia_rede(self: Arc<Self>) {
+        let mut antes = (SystemTime::now(), Instant::now());
+        let mut sem_rota: HashSet<String> = HashSet::new();
+        let mut pendentes: HashSet<String> = HashSet::new();
+        let mut tentou: HashMap<String, Instant> = HashMap::new();
+        loop {
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            let agora = (SystemTime::now(), Instant::now());
+            let acordou = voltou_da_suspensao(antes, agora);
+            antes = agora;
+            if acordou {
+                info!("o computador voltou da suspensao");
+            }
+            let contas: Vec<(String, Option<Arc<Ua>>, bool)> = trava(&self.linhas)
+                .iter()
+                .map(|l| {
+                    let rede = l.registro == EstadoRegistro::Falhou && l.falha_de_rede;
+                    (l.conta.id(), l.ua.clone(), rede)
+                })
+                .collect();
+            for (id, ua, falha_de_rede) in contas {
+                // Falha de rede (nem subiu, ou o PBX nao respondeu): de novo a
+                // cada 30 s, se nao houver ligacao.
+                if falha_de_rede && ua.as_ref().is_none_or(|u| !u.em_ligacao()) {
+                    let vez = tentou
+                        .get(&id)
+                        .is_none_or(|t| t.elapsed() >= Duration::from_secs(30));
+                    if vez {
+                        tentou.insert(id.clone(), Instant::now());
+                        info!(conta = %id, "sem resposta do PBX: tentando de novo");
+                        self.religa_conta(&id).await;
+                    }
+                    continue;
+                }
+                let Some(ua) = ua else { continue };
+                let motivo = match ua.ip_para_o_pbx() {
+                    None => {
+                        sem_rota.insert(id);
+                        continue;
+                    }
+                    Some(ip) if ip != ua.ip() => Some("a rede mudou"),
+                    Some(_) if sem_rota.remove(&id) => Some("a rede voltou"),
+                    Some(_) if acordou => Some("voltou da suspensao"),
+                    Some(_) if pendentes.contains(&id) => Some("pendente"),
+                    Some(_) => None,
+                };
+                let Some(motivo) = motivo else { continue };
+                if ua.em_ligacao() {
+                    pendentes.insert(id);
+                    continue;
+                }
+                pendentes.remove(&id);
+                info!(conta = %id, "{motivo}: registrando de novo");
+                self.religa_conta(&id).await;
+            }
         }
     }
 
@@ -344,7 +452,8 @@ impl Telefone {
                         Some(c) => format!("{c} {motivo}"),
                         None => motivo,
                     };
-                    self.marca_linha(&conta, EstadoRegistro::Falhou, Some(detalhe));
+                    let de_rede = codigo.is_none();
+                    self.marca_linha_com(&conta, EstadoRegistro::Falhou, Some(detalhe), de_rede);
                 }
                 Evento::Registro(Registro::Desregistrado) => {
                     self.marca_linha(&conta, EstadoRegistro::Parada, None);
@@ -707,6 +816,7 @@ impl Telefone {
             ua: None,
             registro: EstadoRegistro::Iniciando,
             detalhe: None,
+            falha_de_rede: false,
         };
         let ua_antigo = {
             let mut linhas = trava(&self.linhas);
@@ -777,4 +887,31 @@ fn onde_tocar(p: &Preferencias) -> som::toque::Onde {
 fn intensidade(volume: u8) -> f32 {
     let v = f32::from(volume.min(100)) / 100.0;
     0.25 * v * v
+}
+
+/// O relogio da parede andou bem mais que o do motor (que para enquanto o
+/// computador dorme): voltou da suspensao. 15 s de folga para acerto de hora.
+fn voltou_da_suspensao(antes: (SystemTime, Instant), agora: (SystemTime, Instant)) -> bool {
+    let parede = agora.0.duration_since(antes.0).unwrap_or_default();
+    let motor = agora.1.saturating_duration_since(antes.1);
+    parede.saturating_sub(motor) > Duration::from_secs(15)
+}
+
+#[cfg(test)]
+mod testes {
+    use super::*;
+
+    #[test]
+    fn suspensao_e_o_relogio_da_parede_pulando() {
+        let (p, m) = (SystemTime::now(), Instant::now());
+        let normal = (p + Duration::from_secs(5), m + Duration::from_secs(5));
+        assert!(!voltou_da_suspensao((p, m), normal));
+        let acerto_de_hora = (p + Duration::from_secs(12), m + Duration::from_secs(5));
+        assert!(!voltou_da_suspensao((p, m), acerto_de_hora));
+        let dormiu = (p + Duration::from_secs(3600), m + Duration::from_secs(5));
+        assert!(voltou_da_suspensao((p, m), dormiu));
+        // Hora voltando para tras nao e suspensao.
+        let para_tras = (p - Duration::from_secs(600), m + Duration::from_secs(5));
+        assert!(!voltou_da_suspensao((p, m), para_tras));
+    }
 }

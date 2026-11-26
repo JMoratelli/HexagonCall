@@ -127,6 +127,12 @@ async fn salva_conta(t: Tel<'_>, conta: FormConta) -> Result<Estado, String> {
 }
 
 #[tauri::command]
+async fn reconecta(t: Tel<'_>, id: String) -> Result<(), String> {
+    let tel = Arc::clone(&t);
+    tel.reconecta(&id).await
+}
+
+#[tauri::command]
 async fn remove_conta(t: Tel<'_>, id: String) -> Result<Estado, String> {
     t.remove_conta(&id).await?;
     Ok(t.estado())
@@ -301,6 +307,7 @@ fn main() -> std::process::ExitCode {
             mensagem,
             salva_conta,
             remove_conta,
+            reconecta,
             salva_preferencias,
             dispositivos
         ])

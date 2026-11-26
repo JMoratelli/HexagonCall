@@ -5,6 +5,7 @@
 //! O motor faz o IO e pergunta aqui; os testes daqui rodam em qualquer lugar.
 
 pub mod conta;
+pub mod dtmf;
 pub mod g711;
 pub mod jitter;
 pub mod ligacao;

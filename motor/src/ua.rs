@@ -135,6 +135,8 @@ struct Ligacao {
     /// Fomos nos que desligamos, cancelamos ou recusamos.
     por_nos: bool,
     encerrada: bool,
+    /// O PBX aceitou a transferencia: o BYE que vier e o fim dela.
+    transferida: bool,
 }
 
 /// O que o nosso SDP disse nesta ligacao. Uma renegociacao responde com o
@@ -711,6 +713,7 @@ impl Ua {
                 tocando: false,
                 por_nos: false,
                 encerrada: false,
+                transferida: false,
             },
         );
         let ua = Arc::clone(self);
@@ -776,6 +779,7 @@ impl Ua {
             socket,
             SocketAddr::new(remota.ip, remota.porta),
             codec,
+            remota.dtmf,
             fonte,
             saida,
         ));
@@ -823,6 +827,7 @@ impl Ua {
                 tocando: false,
                 por_nos: false,
                 encerrada: false,
+                transferida: false,
             },
         );
         info!(%id, %de, "recebendo ligacao");
@@ -867,6 +872,7 @@ impl Ua {
             socket,
             SocketAddr::new(oferta.ip, oferta.porta),
             codec,
+            oferta.dtmf,
             fonte,
             saida,
         );
@@ -925,6 +931,44 @@ impl Ua {
             .ok_or_else(|| Erro::SemLigacao(id.to_string()))?;
         sessao.mudo(sim);
         Ok(())
+    }
+
+    /// Transfere a ligacao, as cegas: REFER para o destino. O PBX liga para
+    /// ele e derruba a nossa perna (BYE), que entra como "transferida".
+    pub async fn transfere(&self, id: &str, destino: &str) -> Result<(), Erro> {
+        let uri = self.uri(destino)?;
+        let dialogo = {
+            let ligacoes = trava(&self.ligacoes);
+            match ligacoes.get(id) {
+                Some(l) if l.atendida && !l.encerrada => l.dialogo.clone(),
+                Some(_) => return Err(Erro::EstadoErrado(id.to_string())),
+                None => return Err(Erro::SemLigacao(id.to_string())),
+            }
+        };
+        match dialogo.refer(format!("<{uri}>"), None, None).await? {
+            Some(r) if r.status_code.kind() == StatusCodeKind::Successful => {
+                if let Some(l) = trava(&self.ligacoes).get_mut(id) {
+                    l.transferida = true;
+                }
+                info!(%id, destino, "transferencia aceita pelo PBX");
+                Ok(())
+            }
+            Some(r) => Err(Erro::Resposta {
+                codigo: r.status_code.code(),
+                motivo: r.status_code.text().to_string(),
+            }),
+            None => Err(Erro::EstadoErrado(id.to_string())),
+        }
+    }
+
+    /// Manda tons do teclado (DTMF, RFC 4733) numa ligacao atendida.
+    pub fn tons(&self, id: &str, teclas: &str) -> Result<usize, Erro> {
+        let ligacoes = trava(&self.ligacoes);
+        let sessao = ligacoes
+            .get(id)
+            .and_then(|l| l.sessao.as_ref())
+            .ok_or_else(|| Erro::SemLigacao(id.to_string()))?;
+        sessao.tons(teclas)
     }
 
     /// Troca o microfone (a fonte) de uma ligacao em andamento.
@@ -1052,6 +1096,9 @@ impl Ua {
     }
 
     fn fim_pelo_dialogo(l: &Ligacao, motivo: &TerminatedReason) -> Option<Fim> {
+        if l.transferida {
+            return Some(Fim::Transferida);
+        }
         if l.por_nos {
             return Some(if l.atendida {
                 Fim::Desligou

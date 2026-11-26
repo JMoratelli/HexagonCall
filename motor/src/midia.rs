@@ -4,6 +4,7 @@
 //! mais uma Fonte e um Destino; por ora ha tom, arquivo WAV e gravacao.
 
 use crate::erro::Erro;
+use nucleo::dtmf;
 use nucleo::g711;
 use nucleo::jitter::{Contagem, Jitter, Variacao};
 use nucleo::rtp::{self, Cabecalho};
@@ -201,6 +202,8 @@ pub struct Estatistica {
     /// Variacao entre chegadas (RFC 3550) ao fim da ligacao e a maior, em ms.
     pub variacao_ms: u64,
     pub variacao_pior_ms: u64,
+    /// Pacotes de tom do teclado (RFC 4733) mandados.
+    pub tons: u64,
     /// Pacotes que nao eram do codec da ligacao (DTMF, ruido de conforto).
     pub outros: u64,
     pub invalidos: u64,
@@ -230,60 +233,95 @@ struct Rumo {
 /// Uma fonte nova esperando o proximo quadro (trocar o microfone no meio da
 /// ligacao).
 type FonteNova = Arc<std::sync::Mutex<Option<Box<dyn Fonte>>>>;
+/// Os tons do teclado (eventos da RFC 4733) esperando a vez.
+type Tons = Arc<std::sync::Mutex<std::collections::VecDeque<u8>>>;
 
-pub struct Sessao {
+/// O que a ligacao muda de fora no laco do audio.
+#[derive(Clone)]
+struct Controles {
     cancela: CancellationToken,
     mudo: Arc<AtomicBool>,
-    rumo: watch::Sender<Rumo>,
     fonte_nova: FonteNova,
+    tons: Tons,
+}
+
+pub struct Sessao {
+    controles: Controles,
+    rumo: watch::Sender<Rumo>,
+    /// O tipo do telephone-event que o outro lado combinou no SDP.
+    tipo_dtmf: Option<u8>,
     tarefa: JoinHandle<Estatistica>,
+}
+
+/// Um tom do teclado saindo: o carimbo e o do comeco, e cada quadro manda um
+/// pacote com a duracao maior (os ultimos, com o fim).
+struct TomEmCurso {
+    evento: u8,
+    carimbo: u32,
+    quadro: u16,
 }
 
 impl Sessao {
     /// Comeca a mandar e receber. `remoto` e o que o SDP disse; se os pacotes
     /// vierem de outro endereco, passamos a responder para la (RTP simetrico).
+    /// `tipo_dtmf`: o telephone-event que o outro lado aceita (None: sem tons).
     pub fn inicia(
         socket: UdpSocket,
         remoto: SocketAddr,
         codec: Codec,
+        tipo_dtmf: Option<u8>,
         fonte: Box<dyn Fonte>,
         destino: Box<dyn Destino>,
     ) -> Self {
-        let cancela = CancellationToken::new();
-        let mudo = Arc::new(AtomicBool::new(false));
         let (rumo, rumo_rx) = watch::channel(Rumo {
             remoto,
             codec,
             envio: Envio::Audio,
         });
-        let fonte_nova: FonteNova = Arc::default();
+        let controles = Controles {
+            cancela: CancellationToken::new(),
+            mudo: Arc::new(AtomicBool::new(false)),
+            fonte_nova: Arc::default(),
+            tons: Arc::default(),
+        };
         let tarefa = tokio::spawn(laco(
             socket,
             rumo_rx,
             fonte,
             destino,
-            cancela.clone(),
-            Arc::clone(&mudo),
-            Arc::clone(&fonte_nova),
+            controles.clone(),
+            tipo_dtmf,
         ));
         Self {
-            cancela,
-            mudo,
+            controles,
             rumo,
-            fonte_nova,
+            tipo_dtmf,
             tarefa,
         }
     }
 
+    /// Manda tons do teclado (0-9, *, #, A-D); o resto e ignorado. Devolve
+    /// quantos entraram na fila.
+    pub fn tons(&self, teclas: &str) -> Result<usize, Erro> {
+        if self.tipo_dtmf.is_none() {
+            return Err(Erro::SemDtmf);
+        }
+        let eventos: Vec<u8> = teclas.chars().filter_map(dtmf::evento).collect();
+        if let Ok(mut fila) = self.controles.tons.lock() {
+            fila.extend(&eventos);
+        }
+        Ok(eventos.len())
+    }
+
     /// Troca o que vai para o outro lado (outro microfone) sem parar a ligacao.
     pub fn troca_fonte(&self, fonte: Box<dyn Fonte>) {
-        if let Ok(mut f) = self.fonte_nova.lock() {
+        if let Ok(mut f) = self.controles.fonte_nova.lock() {
             *f = Some(fonte);
         }
     }
 
     pub fn mudo(&self, sim: bool) {
-        self.mudo.store(sim, Ordering::Relaxed);
+        self.controles.mudo.store(sim, Ordering::Relaxed);
     }
 
     /// Depois de uma renegociacao: o endereco novo do outro lado (None mantem
@@ -301,7 +339,7 @@ impl Sessao {
     }
 
     pub async fn encerra(self) -> Estatistica {
-        self.cancela.cancel();
+        self.controles.cancela.cancel();
         self.tarefa.await.unwrap_or_default()
     }
 }
@@ -330,10 +368,17 @@ async fn laco(
     mut rumo: watch::Receiver<Rumo>,
     mut fonte: Box<dyn Fonte>,
     mut destino: Box<dyn Destino>,
-    cancela: CancellationToken,
-    mudo: Arc<AtomicBool>,
-    fonte_nova: FonteNova,
+    controles: Controles,
+    tipo_dtmf: Option<u8>,
 ) -> Estatistica {
+    let Controles {
+        cancela,
+        mudo,
+        fonte_nova,
+        tons,
+    } = controles;
+    let mut tom: Option<TomEmCurso> = None;
+    let mut pausa: u16 = 0;
     let Rumo {
         mut remoto,
         mut codec,
@@ -395,7 +440,41 @@ async fn laco(
                 if envio != Envio::Audio || mudo.load(Ordering::Relaxed) {
                     quadro = SILENCIO;
                 }
-                if envio != Envio::Nada {
+                // Um tom do teclado na vez deste quadro vai no lugar do audio.
+                if tom.is_none() && envio != Envio::Nada {
+                    if pausa > 0 {
+                        pausa -= 1;
+                    } else if tipo_dtmf.is_some()
+                        && let Some(evento) = tons.try_lock().ok().and_then(|mut f| f.pop_front())
+                    {
+                        tom = Some(TomEmCurso { evento, carimbo: cabecalho.carimbo, quadro: 0 });
+                    }
+                }
+                let mut mandou_tom = false;
+                if let (Some(t), Some(tipo)) = (tom.as_mut(), tipo_dtmf) {
+                    let fim = t.quadro >= dtmf::QUADROS_DO_TOM;
+                    let duracao = 160 * (t.quadro.min(dtmf::QUADROS_DO_TOM - 1) + 1);
+                    let evento = Cabecalho {
+                        tipo,
+                        marcador: t.quadro == 0,
+                        sequencia: cabecalho.sequencia,
+                        carimbo: t.carimbo,
+                        ssrc: cabecalho.ssrc,
+                    };
+                    evento.escreve(&dtmf::carga(t.evento, fim, duracao), &mut pacote);
+                    match socket.send_to(&pacote, remoto).await {
+                        Ok(_) => estatistica.tons += 1,
+                        Err(e) => debug!("rtp: tom nao saiu: {e}"),
+                    }
+                    cabecalho.sequencia = cabecalho.sequencia.wrapping_add(1);
+                    t.quadro += 1;
+                    if t.quadro >= dtmf::QUADROS_DO_TOM + dtmf::FINS {
+                        tom = None;
+                        pausa = dtmf::PAUSA;
+                    }
+                    mandou_tom = true;
+                }
+                if envio != Envio::Nada && !mandou_tom {
                     codifica(codec, &quadro, &mut carga);
                     cabecalho.escreve(&carga, &mut pacote);
                     match socket.send_to(&pacote, remoto).await {

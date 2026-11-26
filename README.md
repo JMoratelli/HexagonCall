@@ -25,9 +25,11 @@ O núcleo foi testado contra um PBX de verdade (Asterisk 13 com chan_sip), e a j
 | Várias contas no mesmo aparelho | na janela: cada conta é um `Ua` com porta própria |
 | Janela: cadastro de conta, discar, atender, mudo, espera, mensagens, últimas chamadas, bandeja, moldura própria | em uso no PBX |
 | Ligação chegando na notificação do sistema (Atender, Recusar), sons, aviso de microfone sem som | na janela |
+| Tons do teclado na ligação (DTMF, RFC 4733) e transferência (REFER) | nos testes locais |
+| Toques de entrada (cinco), tocar em todos os alto-falantes no volume máximo, abrir com o sistema | na janela |
 
-Falta: cancelamento de eco (com caixa de som em vez de headset), DTMF, transferência, a notificação de ligação no
-canto, abrir com o sistema e o instalador. A lista viva fica em `docs/estado.md`.
+Falta: cancelamento de eco (com caixa de som em vez de headset), transferência com consulta, os ícones dos dois
+flavors e o pacote (AppImage e instalador do Windows, com atualização). A lista viva fica em `docs/estado.md`.
 
 ## Como está organizado
 

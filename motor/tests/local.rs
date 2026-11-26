@@ -253,6 +253,68 @@ async fn espera_e_volta() {
 }
 
 #[tokio::test]
+async fn tons_do_teclado_vao_como_eventos_rtp() {
+    let ((a, mut ra), (b, mut rb)) = par().await;
+    let id = a
+        .liga("b", Box::new(Silencio), Box::new(Silencio))
+        .await
+        .unwrap();
+    let chegando = id_recebendo(&espera(&mut rb, |e| matches!(e, Evento::Recebendo { .. })).await);
+    b.atende(&chegando, Box::new(Silencio), Box::new(Silencio))
+        .await
+        .unwrap();
+    espera(&mut ra, |e| matches!(e, Evento::Atendida { .. })).await;
+
+    // "x" nao e tecla: fica de fora.
+    assert_eq!(a.tons(&id, "12x#").unwrap(), 3);
+    // 3 teclas x (5 de tom + 3 de fim) + pausas: uns 700 ms.
+    tokio::time::sleep(Duration::from_millis(1200)).await;
+    a.desliga(&id).await.unwrap();
+
+    let fim_a = espera(&mut ra, |e| matches!(e, Evento::Encerrada { .. })).await;
+    let fim_b = espera(&mut rb, |e| matches!(e, Evento::Encerrada { .. })).await;
+    let (
+        Evento::Encerrada {
+            estatistica: Some(ea),
+            ..
+        },
+        Evento::Encerrada {
+            estatistica: Some(eb),
+            ..
+        },
+    ) = (fim_a, fim_b)
+    else {
+        panic!("a ligacao atendida tem de trazer a estatistica");
+    };
+    assert_eq!(ea.tons, 24, "8 pacotes por tecla");
+    assert!(eb.outros >= 24, "b recebeu {} pacotes de tom", eb.outros);
+}
+
+#[tokio::test]
+async fn transferencia_recusada_mantem_a_ligacao() {
+    let ((a, mut ra), (b, mut rb)) = par().await;
+    let id = a
+        .liga("b", Box::new(Silencio), Box::new(Silencio))
+        .await
+        .unwrap();
+    let chegando = id_recebendo(&espera(&mut rb, |e| matches!(e, Evento::Recebendo { .. })).await);
+    b.atende(&chegando, Box::new(Silencio), Box::new(Silencio))
+        .await
+        .unwrap();
+    espera(&mut ra, |e| matches!(e, Evento::Atendida { .. })).await;
+
+    // O UA de teste nao faz transferencia (responde 501): a ligacao segue, e o
+    // fim continua sendo de quem desligou.
+    match a.transfere(&id, "c").await {
+        Err(Erro::Resposta { codigo: 501, .. }) => {}
+        outro => panic!("esperava 501, veio {outro:?}"),
+    }
+    a.desliga(&id).await.unwrap();
+    let fim_a = espera(&mut ra, |e| matches!(e, Evento::Encerrada { .. })).await;
+    assert_eq!(fim(&fim_a), Fim::Desligou);
+}
+
+#[tokio::test]
 async fn recusar_da_ocupado_para_quem_liga() {
     let ((a, mut ra), (b, mut rb)) = par().await;
     a.liga("b", Box::new(Silencio), Box::new(Silencio))

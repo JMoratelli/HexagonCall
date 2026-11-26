@@ -26,6 +26,8 @@ pub enum Erro {
     EstadoErrado(String),
     #[error("audio: {0}")]
     Audio(String),
+    #[error("o outro lado nao aceita tons do teclado (telephone-event)")]
+    SemDtmf,
 }
 
 impl From<rsipstack::Error> for Erro {

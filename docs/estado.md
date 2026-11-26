@@ -16,6 +16,14 @@ O que está validado, o que falta e as decisões tomadas. Atualizar ao fim de ca
 - Fechar a janela leva para a **bandeja** (o app continua recebendo ligação).
 - **Várias contas** no mesmo aparelho (alguns usam mais de uma). No motor, cada conta é um `Ua`, com porta e registro
   próprios.
+- **Distribuição e atualização** (decisão de 26/11): no Linux, **AppImage** publicada nas releases do GitHub, o que
+  simplifica a atualização. No Windows, o comportamento de atualização do Atalaia Acessos, código nosso
+  (`JMoratelli/acessos`, `internal/atualizador`):
+  - varre a **lista** de releases, e não a marcada como "latest", e fica com a mais nova que tenha pacote para a
+    plataforma;
+  - baixa e confere o sha256;
+  - instala por cima e reabre o app.
+  No Linux, o mesmo caminho com a AppImage: baixar, conferir e trocar o arquivo.
 - Base SIP: **rsipstack** (MIT), sem as features de TLS e WebSocket, que o PBX não usa. G.711, RTP, jitter, SDP e
   presença ficam no `nucleo`, nossos e testados.
 
@@ -54,8 +62,9 @@ fora do git (só na máquina de quem testa). Medido na bancada:
 ## Próximos passos
 
 1. Cancelamento de eco (webrtc-audio-processing, BSD), para quem usa caixa de som. Com headset já dá para usar.
-2. DTMF (RFC 4733) e transferência (REFER). A espera já existe (`Ua::espera`, re-INVITE sendonly) e passa no teste
-   local; falta experimentar contra o PBX, com música de espera ou sem.
+2. Tons do teclado (DTMF, RFC 4733: 5 pacotes de 20 ms + 3 de fim por tecla) e transferência sem consulta (REFER;
+   o BYE do PBX entra como "transferida") estão no motor e na janela, com teste local. Falta conferir no PBX, junto
+   com a espera (com música de espera ou sem). Transferência com consulta fica para depois.
 3. Puxar os ramais do Asterisk com o nome cadastrado: pelo AMI só de leitura, se o fornecedor do PBX liberar.
 4. A janela em **Tauri** (decisão de 26/11; no molde da Usina, do LinuxMachines: HTML puro, sem bundler). **Visível
    desde 26/11** (`janela/`): cadastro de conta, discar, atender, recusar, mudo, espera, mensagens, últimas chamadas,
@@ -66,5 +75,8 @@ fora do git (só na máquina de quem testa). Medido na bancada:
    ligação chegando na notificação do sistema (Atender e Recusar; no KDE, pelo D-Bus), sons sintetizados (Modernos ou
    Clássicos: chamando, teclas, fim, mensagem; o toque de entrada ele aprovou), aviso âmbar "Não te ouço" com troca
    do microfone no meio da ligação (8 s de silêncio absoluto), e a espera sem tocar o outro lado (o Asterisk segue
-   mandando o áudio). Falta: abrir com o sistema, o arquivo `.desktop` (o ícone na barra de tarefas do KDE) e o
-   instalador.
+   mandando o áudio). Ainda em 26/11: cinco toques de entrada tocados pelo Rust (`som::toque`), com volume, e a opção
+   de tocar em todos os alto-falantes no volume máximo (no Linux, sobe cada saída a 100% e devolve depois; gravado no
+   `preferencias.toml`); abrir com o sistema, só na bandeja. No Linux o som vai pelo protocolo do PulseAudio (o
+   PipeWire responde), com buffer de 20 ms; o ALSA cru fica de reserva. Falta: os ícones dos dois flavors e o pacote
+   (AppImage, instalador do Windows) com a atualização.

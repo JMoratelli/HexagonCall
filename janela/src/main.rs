@@ -74,6 +74,36 @@ async fn espera(t: Tel<'_>, id: String, sim: bool) -> Result<(), String> {
     t.espera(&id, sim).await
 }
 
+/// Abrir com o sistema, so na bandeja (`--bandeja`): liga (`Some(true)`),
+/// desliga (`Some(false)`) ou so diz como esta (`None`). Quem guarda e o
+/// sistema (a pasta de inicio do KDE, o Run do Windows).
+#[tauri::command]
+fn abrir_com_o_sistema(app: AppHandle, sim: Option<bool>) -> Result<bool, String> {
+    use tauri_plugin_autostart::ManagerExt;
+    let auto = app.autolaunch();
+    match sim {
+        Some(true) => auto.enable().map_err(|e| e.to_string())?,
+        Some(false) => auto.disable().map_err(|e| e.to_string())?,
+        None => {}
+    }
+    auto.is_enabled().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn ouve_toque(t: Tel<'_>, toque: String) -> Result<(), String> {
+    t.ouve_toque(toque).await
+}
+
+#[tauri::command]
+fn tons(t: Tel<'_>, id: String, teclas: String) -> Result<(), String> {
+    t.tons(&id, &teclas)
+}
+
+#[tauri::command]
+async fn transfere(t: Tel<'_>, id: String, destino: String) -> Result<(), String> {
+    t.transfere(&id, destino.trim()).await
+}
+
 #[tauri::command]
 fn troca_microfone(t: Tel<'_>, microfone: Option<String>) -> Result<(), String> {
     t.troca_microfone(microfone)
@@ -125,26 +155,27 @@ struct Dispositivo {
     padrao: bool,
 }
 
-/// So as placas de verdade: o ALSA lista tambem plugins (null, upmix,
-/// lavrate...) e cada placa em varios caminhos. Fica o padrao do sistema (que
-/// no PipeWire segue o que se escolhe no KDE) e um item por placa.
+/// "Padrao do sistema" primeiro (no PipeWire, segue o que se escolhe no KDE) e
+/// depois cada dispositivo. No ALSA cru (sem servidor de som), so as placas:
+/// ele lista tambem plugins (null, upmix, lavrate) e cada placa em varios
+/// caminhos.
 fn de_verdade(lista: Vec<som::Dispositivo>) -> Vec<Dispositivo> {
-    lista
-        .into_iter()
-        .filter(|d| {
-            !d.id.starts_with("alsa:")
-                || d.id == "alsa:default"
-                || d.id.starts_with("alsa:sysdefault:CARD=")
-        })
-        .map(|d| Dispositivo {
-            nome: if d.id == "alsa:default" {
-                "Padrão do sistema".into()
-            } else {
-                d.nome
-            },
-            id: d.id,
-            padrao: d.padrao,
-        })
+    let padrao = Dispositivo {
+        id: String::new(),
+        nome: "Padrão do sistema".into(),
+        padrao: false,
+    };
+    std::iter::once(padrao)
+        .chain(
+            lista
+                .into_iter()
+                .filter(|d| !d.id.starts_with("alsa:") || d.id.starts_with("alsa:sysdefault:CARD="))
+                .map(|d| Dispositivo {
+                    id: d.id,
+                    nome: d.nome,
+                    padrao: d.padrao,
+                }),
+        )
         .collect()
 }
 
@@ -208,7 +239,7 @@ fn main() -> std::process::ExitCode {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "warn,janela=info,motor=info,som=info".into()),
+                .unwrap_or_else(|_| "warn,janela=info,motor=info,som=info,pulseaudio=off".into()),
         )
         .init();
     let guarda = match Guarda::abre() {
@@ -226,6 +257,10 @@ fn main() -> std::process::ExitCode {
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             mostra(app)
         }))
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            Some(vec!["--bandeja"]),
+        ))
         .setup(move |app| {
             let Some(guarda) = guarda.take() else {
                 return Ok(());
@@ -257,6 +292,10 @@ fn main() -> std::process::ExitCode {
             mudo,
             espera,
             troca_microfone,
+            tons,
+            transfere,
+            ouve_toque,
+            abrir_com_o_sistema,
             mensagem,
             salva_conta,
             remove_conta,

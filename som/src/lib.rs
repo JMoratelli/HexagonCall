@@ -2,8 +2,11 @@
 //! Licenca GNU GPL 3 ou posterior.
 //!
 //! O som do computador para o telefone: o microfone vira uma `Fonte` do motor
-//! e o alto-falante um `Destino`. Por baixo, o cpal: ALSA no Linux (e o
-//! PipeWire ou o PulseAudio por ele) e WASAPI no Windows.
+//! e o alto-falante um `Destino`. Por baixo, o cpal: no Linux, o PipeWire (ou
+//! o PulseAudio) pelo protocolo do PulseAudio, com o ALSA de reserva quando
+//! nao ha servidor; WASAPI no Windows. Pelo ALSA direto, uma placa que o
+//! PipeWire esta usando responde "ocupada", e os nomes sao os dos plugins; pelo
+//! PulseAudio, cada saida e entrada aparece com o nome que o sistema mostra.
 //!
 //! A placa trabalha no ritmo dela, numa thread de audio que nao pode esperar
 //! por nada; o motor trabalha de 20 em 20 ms. Entre os dois, uma fila sem
@@ -12,10 +15,11 @@
 //! atraso nao crescer ao longo da ligacao.
 
 pub mod conversao;
+pub mod toque;
 
 use conversao::{DoTelefone, ParaTelefone};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{FromSample, Sample, SampleFormat, SizedSample, StreamConfig};
+use cpal::{BufferSize, FromSample, Sample, SampleFormat, SizedSample, StreamConfig};
 use motor::midia::{Destino, Fonte, Quadro};
 use rtrb::{Consumer, Producer, RingBuffer};
 use std::sync::Arc;
@@ -70,6 +74,10 @@ fn lista(sentido: Sentido) -> Result<Vec<Dispositivo>, ErroSom> {
     Ok(dispositivos
         .filter_map(|d| {
             let id = d.id().ok()?;
+            // O "monitor" de uma saida (o que ela toca) nao e microfone.
+            if id.to_string().ends_with(".monitor") {
+                return None;
+            }
             let nome = d
                 .description()
                 .map_or_else(|_| id.to_string(), |x| x.name().to_string());
@@ -82,24 +90,60 @@ fn lista(sentido: Sentido) -> Result<Vec<Dispositivo>, ErroSom> {
         .collect())
 }
 
-/// O dispositivo pelo id da lista, ou o padrao do sistema.
+/// O dispositivo pelo id da lista, ou o padrao do sistema. Um id que sumiu
+/// (headset desligado, outro host) cai no padrao: ligacao com som vale mais
+/// que ligacao que nao sai.
 fn escolhe(id: Option<&str>, sentido: Sentido) -> Result<cpal::Device, ErroSom> {
     let host = cpal::default_host();
-    match id {
-        Some(id) => {
-            let chave = id.parse().map_err(|_| ErroSom::NaoAchei(id.to_string()))?;
-            host.device_by_id(&chave)
-                .ok_or_else(|| ErroSom::NaoAchei(id.to_string()))
+    if let Some(id) = id {
+        let achado = id.parse().ok().and_then(|chave| host.device_by_id(&chave));
+        match achado {
+            Some(d) => return Ok(d),
+            None => warn!(id, "dispositivo nao encontrado: vai o padrao do sistema"),
         }
-        None => match sentido {
-            Sentido::Entrada => host
-                .default_input_device()
-                .ok_or(ErroSom::SemDispositivo("microfone")),
-            Sentido::Saida => host
-                .default_output_device()
-                .ok_or(ErroSom::SemDispositivo("alto-falante")),
-        },
     }
+    match sentido {
+        Sentido::Entrada => host
+            .default_input_device()
+            .ok_or(ErroSom::SemDispositivo("microfone")),
+        Sentido::Saida => host
+            .default_output_device()
+            .ok_or(ErroSom::SemDispositivo("alto-falante")),
+    }
+}
+
+/// A configuracao padrao da placa, com buffer de 20 ms no PulseAudio: o
+/// padrao do servidor para tocar chega a 2 s, o que numa ligacao e eco de si
+/// mesmo. No ALSA e no WASAPI fica o que o dispositivo escolhe.
+fn configuracao(
+    dispositivo: &cpal::Device,
+    suportado: cpal::SupportedStreamConfig,
+) -> StreamConfig {
+    let taxa = suportado.sample_rate();
+    let mut config: StreamConfig = suportado.into();
+    let pulse = dispositivo
+        .id()
+        .is_ok_and(|id| id.to_string().starts_with("pulseaudio:"));
+    if pulse {
+        config.buffer_size = BufferSize::Fixed(taxa / 50);
+    }
+    config
+}
+
+/// Os dispositivos de saida, para tocar em todos.
+pub(crate) fn todas_as_saidas() -> Vec<cpal::Device> {
+    cpal::default_host()
+        .output_devices()
+        .map(Iterator::collect)
+        .unwrap_or_default()
+}
+
+pub(crate) fn saida(id: Option<&str>) -> Result<cpal::Device, ErroSom> {
+    escolhe(id, Sentido::Saida)
+}
+
+pub(crate) fn configuracao_de_saida(d: &cpal::Device) -> Result<StreamConfig, ErroSom> {
+    Ok(configuracao(d, d.default_output_config()?))
 }
 
 fn amostras_em(taxa: u32, ms: u32) -> usize {
@@ -149,7 +193,7 @@ impl Microfone {
         let taxa = suportado.sample_rate();
         let canais = usize::from(suportado.channels().max(1));
         let formato = suportado.sample_format();
-        let config: StreamConfig = suportado.into();
+        let config = configuracao(&dispositivo, suportado);
         // Meio segundo de fila: so enche se o motor parar de ler.
         let (produtor, fila) = RingBuffer::new(amostras_em(taxa, 500));
         let fluxo = match formato {
@@ -258,7 +302,7 @@ impl AltoFalante {
         let taxa = suportado.sample_rate();
         let canais = usize::from(suportado.channels().max(1));
         let formato = suportado.sample_format();
-        let config: StreamConfig = suportado.into();
+        let config = configuracao(&dispositivo, suportado);
         let capacidade = amostras_em(taxa, 500);
         let (mut fila, consumidor) = RingBuffer::new(capacidade);
         // 40 ms de silencio na frente: o motor entrega de 20 em 20 ms e a

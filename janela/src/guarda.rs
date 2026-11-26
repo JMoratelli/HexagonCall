@@ -65,6 +65,12 @@ pub struct Preferencias {
     /// aparece sempre; isto se desliga, pedido de 26/11).
     pub trazer_para_frente: bool,
     pub sons: Sons,
+    /// O toque de quem liga (id de `som::toque::toques`).
+    pub toque: String,
+    /// De 0 a 100.
+    pub volume_toque: u8,
+    /// Tocar em todos os alto-falantes, no volume maximo (opcional, 26/11).
+    pub toque_em_todos: bool,
 }
 
 impl Default for Preferencias {
@@ -75,6 +81,9 @@ impl Default for Preferencias {
             alto_falante: None,
             trazer_para_frente: true,
             sons: Sons::default(),
+            toque: "colmeia".into(),
+            volume_toque: 50,
+            toque_em_todos: false,
         }
     }
 }
@@ -523,6 +532,9 @@ mod testes {
             alto_falante: None,
             trazer_para_frente: false,
             sons: Sons::Classicos,
+            toque: "marimba".into(),
+            volume_toque: 80,
+            toque_em_todos: true,
         };
         g.grava_preferencias(&p).unwrap();
         assert_eq!(g.preferencias(), p);

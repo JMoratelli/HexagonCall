@@ -33,6 +33,8 @@ pub struct Telefone {
     notificacoes: Notificacoes,
     /// O medidor do microfone da ligacao em andamento.
     medidor: Mutex<Option<som::Medidor>>,
+    /// O toque de quem liga, enquanto toca (largar devolve o volume).
+    tocador: Mutex<Option<som::toque::Tocador>>,
 }
 
 struct Linha {
@@ -94,6 +96,13 @@ pub struct ChamadaVista {
     pub desde: u64,
 }
 
+/// Um toque de quem liga, para a lista das configuracoes.
+#[derive(Debug, Clone, Serialize)]
+pub struct ToqueVista {
+    pub id: &'static str,
+    pub nome: &'static str,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Estado {
@@ -104,6 +113,7 @@ pub struct Estado {
     pub preferencias: Preferencias,
     pub tem_chaveiro: bool,
     pub pasta: String,
+    pub toques: Vec<ToqueVista>,
 }
 
 /// O que chega na tela.
@@ -172,6 +182,7 @@ impl Telefone {
             chamadas: Mutex::new(HashMap::new()),
             notificacoes: Notificacoes::default(),
             medidor: Mutex::new(None),
+            tocador: Mutex::new(None),
         })
     }
 
@@ -253,6 +264,13 @@ impl Telefone {
             preferencias: self.guarda.preferencias(),
             tem_chaveiro: Guarda::tem_chaveiro(),
             pasta: self.guarda.pasta().display().to_string(),
+            toques: som::toque::toques()
+                .iter()
+                .map(|t| ToqueVista {
+                    id: t.id,
+                    nome: t.nome,
+                })
+                .collect(),
         }
     }
 
@@ -349,6 +367,7 @@ impl Telefone {
                 Evento::Tocando { id } => self.avisa(Aviso::Tocando { id }),
                 Evento::Atendida { id, codec } => {
                     self.notificacoes.fecha(&id);
+                    self.para_o_toque();
                     if let Some(c) = trava(&self.chamadas).get_mut(&id) {
                         c.atendida = true;
                         c.atendida_em = Some(agora());
@@ -364,6 +383,12 @@ impl Telefone {
                 Evento::Espera { id, sim } => self.avisa(Aviso::Espera { id, sim }),
                 Evento::Encerrada { id, fim, .. } => {
                     self.notificacoes.fecha(&id);
+                    if trava(&self.chamadas)
+                        .get(&id)
+                        .is_some_and(|c| c.entrada && !c.atendida)
+                    {
+                        self.para_o_toque();
+                    }
                     let Some(c) = trava(&self.chamadas).remove(&id) else {
                         continue;
                     };
@@ -446,12 +471,57 @@ impl Telefone {
             &quem,
             &ramal,
         );
+        self.toca_o_toque(&preferencias).await;
         self.avisa(Aviso::Recebendo {
             id,
             conta: conta.to_string(),
             ramal,
             nome,
         });
+    }
+
+    /// Toca o toque de quem liga como as preferencias pedem (abrir as saidas e
+    /// mexer no volume bloqueia um pouco: fora da tarefa do telefone).
+    async fn toca_o_toque(&self, p: &Preferencias) {
+        let toque = p.toque.clone();
+        let onde = onde_tocar(p);
+        let intensidade = intensidade(p.volume_toque);
+        let aberto = tauri::async_runtime::spawn_blocking(move || {
+            som::toque::Tocador::toca(&toque, &onde, intensidade)
+        })
+        .await;
+        match aberto {
+            Ok(Ok(t)) => *trava(&self.tocador) = Some(t),
+            Ok(Err(e)) => warn!("o toque nao tocou: {e}"),
+            Err(e) => warn!("o toque nao tocou: {e}"),
+        }
+    }
+
+    fn para_o_toque(&self) {
+        let tocador = trava(&self.tocador).take();
+        if let Some(t) = tocador {
+            // Devolver o volume roda o pactl: fora da tarefa do telefone.
+            std::thread::spawn(move || drop(t));
+        }
+    }
+
+    /// Toca o toque por 3 s, para escolher nas configuracoes.
+    pub async fn ouve_toque(&self, toque: String) -> Result<(), String> {
+        if !trava(&self.chamadas).is_empty() {
+            return Err("durante a ligação, não".into());
+        }
+        let p = self.guarda.preferencias();
+        let onde = onde_tocar(&p);
+        let intensidade = intensidade(p.volume_toque);
+        tauri::async_runtime::spawn_blocking(move || {
+            let tocador = som::toque::Tocador::toca(&toque, &onde, intensidade)?;
+            std::thread::sleep(std::time::Duration::from_secs(3));
+            drop(tocador);
+            Ok::<(), som::ErroSom>(())
+        })
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())
     }
 
     fn ua_da_conta(&self, conta: &str) -> Option<Arc<Ua>> {
@@ -545,6 +615,8 @@ impl Telefone {
 
     pub async fn atende(&self, id: &str) -> Result<(), String> {
         let ua = self.ua_da_chamada(id)?;
+        // O toque sai antes de abrir o audio da ligacao (pode ser a mesma saida).
+        self.para_o_toque();
         let (fonte, saida, medidor) = self.audio()?;
         ua.atende(id, fonte, saida)
             .await
@@ -566,6 +638,18 @@ impl Telefone {
             c.mudo = sim;
         }
         Ok(())
+    }
+
+    pub fn tons(&self, id: &str, teclas: &str) -> Result<(), String> {
+        self.ua_da_chamada(id)?
+            .tons(id, teclas)
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+
+    pub async fn transfere(&self, id: &str, destino: &str) -> Result<(), String> {
+        let ua = self.ua_da_chamada(id)?;
+        ua.transfere(id, destino).await.map_err(|e| e.to_string())
     }
 
     pub async fn espera(&self, id: &str, sim: bool) -> Result<(), String> {
@@ -676,4 +760,19 @@ impl Telefone {
         self.avisa_contas();
         Ok(())
     }
+}
+
+fn onde_tocar(p: &Preferencias) -> som::toque::Onde {
+    if p.toque_em_todos {
+        som::toque::Onde::Todas
+    } else {
+        som::toque::Onde::Um(p.alto_falante.clone())
+    }
+}
+
+/// O volume do toque (0 a 100) na amplitude: em curva, como o ouvido sente.
+/// 50 da o volume do toque aprovado em 26/11.
+fn intensidade(volume: u8) -> f32 {
+    let v = f32::from(volume.min(100)) / 100.0;
+    0.25 * v * v
 }

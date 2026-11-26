@@ -92,4 +92,10 @@ fora do git (só na máquina de quem testa). Medido na bancada:
    Ícones (26/11, escolhidos numa prova com cinco opções): o hexágono com sinal, verde no Hexagon Call (H2, o do
    executável: `janela/icons/icon.png` e `.ico`) e vermelho e amarelo no M Calls (M2, `janela/icons/m-calls.*`,
    aplicado na janela e na bandeja quando o flavor é mcalls). Sem a logo do Machadão: o repositório é público.
+   Ainda em 26/11: o "Não te ouço" diagnostica (primeiro: a entrada está muda no sistema ou com volume 0%? "Tirar do
+   mudo" resolve; só se não estiver, escuta as outras entradas por 1,5 s e sugere a que capta som), "Testar microfone"
+   em Ajustes → Áudio (medidor por 10 s), conta principal (`principal = true` no `contas.toml`; a setinha do Ligar
+   troca a conta na hora; a conta aparece na ligação que chega e no histórico quando há mais de uma) e pausar música
+   e vídeo ao atender (MPRIS no D-Bus; ao desligar, retoma só o que pausou e continua pausado). No Windows, o mudo
+   do sistema e o pause ainda não fazem nada.
    Falta: o pacote (AppImage, instalador do Windows) com a atualização.

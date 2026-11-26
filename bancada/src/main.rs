@@ -111,6 +111,12 @@ enum Comando {
     },
     /// Lista os microfones e alto-falantes (o * e o padrao do sistema).
     Dispositivos,
+    /// O diagnostico do "nao te ouco": a entrada esta muda no sistema? que
+    /// outras entradas estao captando som?
+    Diagnostico {
+        #[arg(long)]
+        microfone: Option<String>,
+    },
     /// Mostra o volume do microfone a cada meio segundo, sem ligar.
     Nivel {
         /// O id de `dispositivos`; sem ele, o padrao do sistema.
@@ -348,6 +354,22 @@ async fn nivel(microfone: Option<&str>, segundos: u64) -> Result<(), String> {
 async fn executa(args: Args) -> Result<(), String> {
     match &args.comando {
         Comando::Dispositivos => return dispositivos(),
+        Comando::Diagnostico { microfone } => {
+            let m = microfone.as_deref();
+            match som::diagnostico::muda_no_sistema(m) {
+                Some(true) => println!("a entrada esta muda no sistema (ou com volume 0%)"),
+                Some(false) => println!("a entrada nao esta muda no sistema"),
+                None => println!("nao da para saber se a entrada esta muda"),
+            }
+            let outras = som::diagnostico::outras_captando(m, Duration::from_millis(1500));
+            if outras.is_empty() {
+                println!("nenhuma outra entrada captando som");
+            }
+            for o in outras {
+                println!("captando: {} ({:.1} dBFS)  [{}]", o.nome, o.nivel_db, o.id);
+            }
+            return Ok(());
+        }
         Comando::Nivel {
             microfone,
             segundos,
@@ -419,7 +441,7 @@ async fn executa(args: Args) -> Result<(), String> {
             }
             Ok(())
         }
-        Comando::Dispositivos | Comando::Nivel { .. } => Ok(()),
+        Comando::Dispositivos | Comando::Nivel { .. } | Comando::Diagnostico { .. } => Ok(()),
     };
     ua.encerra().await;
     // O que chegou durante o encerramento (desregistro, fim da ligacao).

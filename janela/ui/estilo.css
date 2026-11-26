@@ -431,3 +431,21 @@ body { border: 1px solid var(--border); }
 .rail .icone .ic { width: 19px; height: 19px; }
 .rail .n { position: absolute; top: -5px; right: -3px; min-width: 17px; height: 17px; padding: 0 4px; border-radius: 999px; display: grid; place-items: center; font-size: 10.5px; font-weight: 700; font-variant-numeric: tabular-nums; color: #ffffff; background: var(--c); box-shadow: 0 0 0 2px var(--thread); }
 
+/* ---- Teste do microfone ---- */
+.medidor { width: 150px; height: 10px; border-radius: 999px; background: var(--muted); overflow: hidden; }
+.medidor span { display: block; height: 100%; width: 0; border-radius: 999px; background: color-mix(in srgb, var(--ok) 70%, var(--card)); transition: width .09s linear; }
+.medidor span[data-forte="1"] { background: var(--ok); }
+#teste-aviso:empty { display: none; }
+#teste-aviso { padding: 0 14px 12px; }
+.alerta .btn.prim { color: var(--on-primary); }
+
+/* ---- Varias contas: o Ligar com a setinha da conta ---- */
+.ligar { display: grid; grid-template-columns: minmax(0, 1fr) 40px; gap: 2px; flex-shrink: 0; }
+.ligar .callbtn { border-radius: 12px 4px 4px 12px; }
+.ligar .callbtn small { font-size: 12.5px; font-weight: 600; opacity: .85; }
+.ligar .seta { padding: 0; border-radius: 4px 12px 12px 4px; }
+.ligar .seta .ic { width: 16px; height: 16px; }
+.pill.principal { height: 18px; padding: 0 7px; font-size: 11px; vertical-align: 1px; --c: var(--primary-text); }
+.opt .dot { margin-left: auto; }
+
+.grupo > #teste-aviso + .item { border-top: 1px solid var(--line); }

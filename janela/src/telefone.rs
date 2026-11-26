@@ -7,6 +7,7 @@
 //! ligacao, ela e recusada (486) e entra no historico como perdida.
 
 use crate::guarda::{Guarda, ItemConversa, ItemHistorico, OndeASenha, Preferencias, agora};
+use crate::musica::Musica;
 use crate::notificacao::Notificacoes;
 use motor::midia::{Destino, Fonte};
 use motor::{Evento, Opcoes, Registro, Ua};
@@ -36,6 +37,10 @@ pub struct Telefone {
     medidor: Mutex<Option<som::Medidor>>,
     /// O toque de quem liga, enquanto toca (largar devolve o volume).
     tocador: Mutex<Option<som::toque::Tocador>>,
+    /// O teste do microfone (Ajustes) esta rodando.
+    testando: std::sync::atomic::AtomicBool,
+    /// O que a ligacao pausou (musica, video), para retomar ao desligar.
+    musica: Musica,
 }
 
 struct Linha {
@@ -83,6 +88,7 @@ pub struct ContaVista {
     pub porta: u16,
     pub nome: Option<String>,
     pub registra: bool,
+    pub principal: bool,
     pub registro: EstadoRegistro,
     pub detalhe: Option<String>,
     pub senha: Option<OndeASenha>,
@@ -99,6 +105,13 @@ pub struct ChamadaVista {
     pub nome: Option<String>,
     pub atendida: bool,
     pub desde: u64,
+}
+
+/// Outra entrada que esta captando som, para a tela sugerir.
+#[derive(Debug, Clone, Serialize)]
+pub struct Alternativa {
+    pub id: String,
+    pub nome: String,
 }
 
 /// Um toque de quem liga, para a lista das configuracoes.
@@ -145,10 +158,20 @@ pub enum Aviso {
         id: String,
         sim: bool,
     },
-    /// O microfone so manda silencio (`silencio`) ou voltou a mandar som.
+    /// O microfone so manda silencio (`silencio`) ou voltou a mandar som. Com
+    /// silencio, o diagnostico: mudo no sistema, ou outras entradas captando.
     Microfone {
         id: String,
         silencio: bool,
+        mudo: bool,
+        alternativas: Vec<Alternativa>,
+    },
+    /// O teste do microfone (Ajustes): o nivel a cada 100 ms, e o fim.
+    Nivel {
+        db: f32,
+        mudo: bool,
+        fim: bool,
+        erro: Option<String>,
     },
     Encerrada {
         id: String,
@@ -170,6 +193,9 @@ pub struct FormConta {
     pub porta: u16,
     pub nome: Option<String>,
     pub registra: bool,
+    /// As ligacoes saem por ela (tira a marca das outras).
+    #[serde(default)]
+    pub principal: bool,
     /// Vazio mantem a senha que ja estava.
     pub senha: Option<String>,
 }
@@ -188,6 +214,8 @@ impl Telefone {
             notificacoes: Notificacoes::default(),
             medidor: Mutex::new(None),
             tocador: Mutex::new(None),
+            testando: std::sync::atomic::AtomicBool::new(false),
+            musica: Musica::default(),
         })
     }
 
@@ -244,6 +272,7 @@ impl Telefone {
                 porta: l.conta.porta,
                 nome: l.conta.nome.clone(),
                 registra: l.conta.registra,
+                principal: l.conta.principal,
                 registro: l.registro,
                 detalhe: l.detalhe.clone(),
                 senha: self.guarda.onde_a_senha(&l.conta.id()),
@@ -477,6 +506,9 @@ impl Telefone {
                 Evento::Atendida { id, codec } => {
                     self.notificacoes.fecha(&id);
                     self.para_o_toque();
+                    if self.guarda.preferencias().pausar_musica {
+                        self.musica.pausa();
+                    }
                     if let Some(c) = trava(&self.chamadas).get_mut(&id) {
                         c.atendida = true;
                         c.atendida_em = Some(agora());
@@ -501,6 +533,9 @@ impl Telefone {
                     let Some(c) = trava(&self.chamadas).remove(&id) else {
                         continue;
                     };
+                    if c.atendida {
+                        self.musica.retoma();
+                    }
                     let item = ItemHistorico {
                         quando: c.inicio,
                         conta: c.conta,
@@ -537,12 +572,104 @@ impl Telefone {
             let silencio = !mudo && !espera && segundos >= SILENCIO_PARA_AVISAR;
             if silencio != avisado {
                 avisado = silencio;
+                let (mudo, alternativas) = if silencio {
+                    self.diagnostica_microfone().await
+                } else {
+                    (false, Vec::new())
+                };
                 self.avisa(Aviso::Microfone {
                     id: id.clone(),
                     silencio,
+                    mudo,
+                    alternativas,
                 });
             }
         }
+    }
+
+    /// Por que nao ha som: primeiro, a entrada esta muda no sistema? Se nao,
+    /// outra entrada esta captando? (so quando a principal nao capta.)
+    async fn diagnostica_microfone(&self) -> (bool, Vec<Alternativa>) {
+        let microfone = self.guarda.preferencias().microfone;
+        let feito = tauri::async_runtime::spawn_blocking(move || {
+            if som::diagnostico::muda_no_sistema(microfone.as_deref()) == Some(true) {
+                return (true, Vec::new());
+            }
+            let outras = som::diagnostico::outras_captando(
+                microfone.as_deref(),
+                Duration::from_millis(1500),
+            );
+            let alternativas = outras
+                .into_iter()
+                .map(|c| Alternativa {
+                    id: c.id,
+                    nome: c.nome,
+                })
+                .collect();
+            (false, alternativas)
+        })
+        .await;
+        feito.unwrap_or_default()
+    }
+
+    /// "Tirar do mudo", no aviso ou no teste do microfone.
+    pub fn tira_do_mudo(&self) -> Result<(), String> {
+        let microfone = self.guarda.preferencias().microfone;
+        som::diagnostico::tira_do_mudo(microfone.as_deref()).map_err(|e| e.to_string())
+    }
+
+    /// O teste do microfone das configuracoes: 10 s mandando o nivel para a
+    /// tela (a cada 100 ms), com o aviso de mudo no sistema.
+    pub fn testa_microfone(self: &Arc<Self>, microfone: Option<String>) -> Result<(), String> {
+        use std::sync::atomic::Ordering;
+        if !trava(&self.chamadas).is_empty() {
+            return Err("durante a ligação, não".into());
+        }
+        if self.testando.swap(true, Ordering::SeqCst) {
+            return Ok(());
+        }
+        let tel = Arc::clone(self);
+        std::thread::spawn(move || {
+            let m = microfone.as_deref();
+            let mudo = som::diagnostico::muda_no_sistema(m) == Some(true);
+            let mut erro = None;
+            match som::Microfone::abre(m) {
+                Ok(mut mic) => {
+                    let fim = Instant::now() + Duration::from_secs(10);
+                    let mut quadro = [0i16; motor::midia::AMOSTRAS];
+                    let (mut maior, mut n) = (-120.0f32, 0u32);
+                    while Instant::now() < fim && tel.testando.load(Ordering::SeqCst) {
+                        std::thread::sleep(Duration::from_millis(20));
+                        mic.le(&mut quadro);
+                        maior = maior.max(som::diagnostico::nivel_db(&quadro));
+                        n += 1;
+                        if n % 5 == 0 {
+                            tel.avisa(Aviso::Nivel {
+                                db: maior,
+                                mudo,
+                                fim: false,
+                                erro: None,
+                            });
+                            maior = -120.0;
+                        }
+                    }
+                }
+                Err(e) => erro = Some(e.to_string()),
+            }
+            tel.testando.store(false, Ordering::SeqCst);
+            tel.avisa(Aviso::Nivel {
+                db: -120.0,
+                mudo,
+                fim: true,
+                erro,
+            });
+        });
+        Ok(())
+    }
+
+    pub fn para_teste_microfone(&self) {
+        self.testando
+            .store(false, std::sync::atomic::Ordering::SeqCst);
     }
 
     async fn chegando(&self, conta: &str, id: String, ramal: String, nome: Option<String>) {
@@ -654,11 +781,18 @@ impl Telefone {
     /// A conta pedida, ou a primeira registrada, ou a primeira que estiver no ar.
     fn ua_para_ligar(&self, conta: Option<&str>) -> Result<(String, Arc<Ua>), String> {
         let linhas = trava(&self.linhas);
+        // A pedida; senao a principal; senao a primeira registrada; senao a
+        // primeira no ar.
         let escolhida = match conta {
             Some(id) => linhas.iter().find(|l| l.conta.id() == id),
             None => linhas
                 .iter()
-                .find(|l| l.registro == EstadoRegistro::Registrado && l.ua.is_some())
+                .find(|l| l.conta.principal && l.ua.is_some())
+                .or_else(|| {
+                    linhas
+                        .iter()
+                        .find(|l| l.registro == EstadoRegistro::Registrado && l.ua.is_some())
+                })
                 .or_else(|| linhas.iter().find(|l| l.ua.is_some())),
         };
         let l = escolhida.ok_or("nenhuma conta no ar: cadastre uma nas configurações")?;
@@ -805,6 +939,7 @@ impl Telefone {
             .map(|n| n.trim().to_string())
             .filter(|n| !n.is_empty());
         conta.registra = f.registra;
+        conta.principal = f.principal;
         conta.valida().map_err(|e| e.to_string())?;
         let id = conta.id();
         let senha = f.senha.filter(|s| !s.is_empty());
@@ -838,6 +973,11 @@ impl Telefone {
                     None
                 }
             };
+            if conta.principal {
+                for l in linhas.iter_mut().filter(|l| l.conta.id() != id) {
+                    l.conta.principal = false;
+                }
+            }
             let contas: Vec<Conta> = linhas.iter().map(|l| l.conta.clone()).collect();
             self.guarda.grava_contas(&contas)?;
             ua_antigo

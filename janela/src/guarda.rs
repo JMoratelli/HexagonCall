@@ -89,6 +89,8 @@ pub struct Preferencias {
     pub toque_em_todos: bool,
     /// Subir as saidas ao volume maximo enquanto toca (separado do "todos").
     pub toque_no_maximo: bool,
+    /// Pausar musica e video ao atender, e voltar ao desligar.
+    pub pausar_musica: bool,
 }
 
 impl Default for Preferencias {
@@ -104,6 +106,7 @@ impl Default for Preferencias {
             volume_toque: 50,
             toque_em_todos: false,
             toque_no_maximo: false,
+            pausar_musica: true,
         }
     }
 }
@@ -560,6 +563,7 @@ mod testes {
             volume_toque: 80,
             toque_em_todos: true,
             toque_no_maximo: false,
+            pausar_musica: false,
         };
         g.grava_preferencias(&p).unwrap();
         assert_eq!(g.preferencias(), p);

@@ -12,6 +12,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod guarda;
+mod musica;
 mod notificacao;
 mod telefone;
 
@@ -117,6 +118,22 @@ fn tons(t: Tel<'_>, id: String, teclas: String) -> Result<(), String> {
 #[tauri::command]
 async fn transfere(t: Tel<'_>, id: String, destino: String) -> Result<(), String> {
     t.transfere(&id, destino.trim()).await
+}
+
+#[tauri::command]
+fn tira_do_mudo(t: Tel<'_>) -> Result<(), String> {
+    t.tira_do_mudo()
+}
+
+#[tauri::command]
+fn testa_microfone(t: Tel<'_>, microfone: Option<String>) -> Result<(), String> {
+    let tel = Arc::clone(&t);
+    tel.testa_microfone(microfone.filter(|m| !m.is_empty()))
+}
+
+#[tauri::command]
+fn para_teste_microfone(t: Tel<'_>) {
+    t.para_teste_microfone();
 }
 
 #[tauri::command]
@@ -318,6 +335,9 @@ fn main() -> std::process::ExitCode {
             mudo,
             espera,
             troca_microfone,
+            tira_do_mudo,
+            testa_microfone,
+            para_teste_microfone,
             tons,
             transfere,
             ouve_toque,

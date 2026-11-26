@@ -40,6 +40,14 @@ pub struct Conta {
     /// passam a ser barrados: medido na bancada de 26/11/2026.
     #[serde(default = "sinal_padrao")]
     pub sinal_de_vida_s: u32,
+    /// As ligacoes saem por esta, quando ha mais de uma (uma so e principal).
+    #[serde(default, skip_serializing_if = "nao")]
+    pub principal: bool,
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref)]
+const fn nao(v: &bool) -> bool {
+    !*v
 }
 
 const fn porta_padrao() -> u16 {
@@ -139,6 +147,7 @@ impl Conta {
             registra: registra_padrao(),
             expira_s: expira_padrao(),
             sinal_de_vida_s: sinal_padrao(),
+            principal: false,
         }
     }
 
@@ -239,6 +248,7 @@ mod testes {
         let mut b = Conta::nova("1001", "outro.exemplo");
         b.porta = 5070;
         b.registra = false;
+        b.principal = true;
         let texto = escreve_contas(&[a.clone(), b.clone()]).unwrap();
         assert!(texto.starts_with("# Contas do Hexagon Call"));
         assert!(

@@ -96,7 +96,10 @@ const pessoa = r => { const n = nomeDe(r); return { r, n: n || r, conhecido: !!n
 const primeiro = d => d.conhecido ? d.n.split(' ')[0] : d.r
 const av = (d, size) => '<span class="av' + (size ? ' ' + size : '') + '" style="--h:' + d.h + '" aria-hidden="true">' + esc(d.conhecido ? ini(d.n) : '#') + '</span>'
 const ehNumero = v => /^[0-9*#+]+$/.test(v)
-const contaPrincipal = () => state.contas.find(c => c.registro === 'registrado') || state.contas[0] || null
+const contaPrincipal = () => state.contas.find(c => c.principal) || state.contas.find(c => c.registro === 'registrado') || state.contas[0] || null
+const ramalDaConta = id => String(id || '').split('@')[0]
+/** A conta da ligacao que vai sair: a escolhida na setinha (so ate ligar), ou a principal. */
+const contaDaLigacao = () => state.contas.find(c => c.id === state.contaLigacao) || contaPrincipal()
 const meusRamais = () => new Set(state.contas.map(c => c.usuario))
 
 /** Quem ja ligou ou mandou mensagem, do mais recente para o mais antigo. */
@@ -199,8 +202,13 @@ const padHTML = m => '<div class="pad">' + KEYS.map(([k, l]) => '<button type="b
 function dialPanel () {
   return '<label class="dial-disp"><input id="dial-main" type="text" autocomplete="off" spellcheck="false" aria-label="Ramal, número ou nome" placeholder="Ramal, número ou nome" value="' + esc(state.dial) + '">' +
     '<button type="button" class="iconbtn sm" data-act="dialback" aria-label="Apagar o último" title="Apagar" tabindex="-1">' + ic('back') + '</button></label>' +
-    '<div class="match" id="match-main">' + matchHTML() + '</div>' + padHTML('main') +
-    '<button type="button" class="callbtn" data-act="dialgo">' + ic('phone') + 'Ligar</button>'
+    '<div class="match" id="match-main">' + matchHTML() + '</div>' + padHTML('main') + ligarHTML()
+}
+function ligarHTML () {
+  if (state.contas.length < 2) return '<button type="button" class="callbtn" data-act="dialgo">' + ic('phone') + 'Ligar</button>'
+  const c = contaDaLigacao(), outra = c && !c.principal && state.contaLigacao
+  return '<div class="ligar"><button type="button" class="callbtn" data-act="dialgo">' + ic('phone') + 'Ligar' + (outra ? ' <small>· ' + esc(c.usuario) + '</small>' : '') + '</button>' +
+    '<button type="button" class="callbtn seta" data-act="pick-conta" data-pop aria-haspopup="dialog" aria-expanded="false" aria-label="Ligar por outra conta" title="Ligar por ' + esc(c ? c.usuario : '') + ' (trocar)">' + ic('caret') + '</button></div>'
 }
 function matches () {
   const v = state.dial.trim(); if (!v) return []
@@ -229,9 +237,12 @@ function callPanel (c) {
     return '<div class="cp">' + who + '<span class="cp-state">' + ic('pout') + (c.tocando ? 'Tocando…' : 'Chamando…') + '</span></div><button type="button" class="hangbtn" data-act="hangup">' + ic('hang') + 'Cancelar</button>'
   }
   const notas = (c.held ? ' · <b>em espera</b>' : '') + (c.deles ? ' · <b>' + esc(primeiro(d)) + ' pôs em espera</b>' : '') + (c.muted ? ' · <b>mudo</b>' : '')
-  const alerta = c.semSom
-    ? '<div class="alerta" role="status">' + ic('micoff') + '<div><b>Não te ouço</b><span>O microfone está mandando silêncio. Quer testar outro?</span></div><button type="button" class="btn sm" data-act="pick" data-k="microfoneLigacao" data-pop aria-haspopup="dialog" aria-expanded="false" title="Microfone">Trocar</button></div>'
-    : ''
+  const outra = (c.alternativas || [])[0]
+  const trocar = '<button type="button" class="btn sm" data-act="pick" data-k="microfoneLigacao" data-pop aria-haspopup="dialog" aria-expanded="false" title="Microfone">' + (outra ? 'Outro' : 'Trocar') + '</button>'
+  let alerta = ''
+  if (c.semSom && c.micMudo) alerta = '<div class="alerta" role="status">' + ic('micoff') + '<div><b>Seu microfone está mudo</b><span>Está mudo no sistema (ou com o volume em zero).</span></div><button type="button" class="btn sm prim" data-act="tira-do-mudo">Tirar do mudo</button></div>'
+  else if (c.semSom && outra) alerta = '<div class="alerta" role="status">' + ic('micoff') + '<div><b>Não te ouço</b><span>' + esc(outra.nome) + ' está captando som. Usar esse?</span></div><button type="button" class="btn sm prim" data-act="usa-microfone" data-v="' + esc(outra.id) + '">Usar</button>' + trocar + '</div>'
+  else if (c.semSom) alerta = '<div class="alerta" role="status">' + ic('micoff') + '<div><b>Não te ouço</b><span>O microfone está mandando silêncio. Quer testar outro?</span></div>' + trocar + '</div>'
   return '<div class="cp">' + who + '<div><div class="cp-timer" id="cp-timer">' + fmt((Date.now() - c.t0) / 1000) + '</div><div class="cp-q">' + ic('signal') + esc(c.codec || 'G.711') + ' · 8 kHz' + notas + '</div></div>' + alerta +
     '<div class="cp-grid">' +
     '<button type="button" class="cpb" data-act="mute" aria-pressed="' + !!c.muted + '">' + ic(c.muted ? 'micoff' : 'mic') + 'Mudo</button>' +
@@ -256,7 +267,8 @@ function transferPanel (c) {
 }
 function incomingPanel (c) {
   const d = pessoa(c.r)
-  return '<div class="cp ringing"><div class="cp-who">' + av(d, 'xl') + '<b>' + esc(d.n) + '</b><small>' + esc(c.r) + '</small></div><span class="cp-state">' + ic('pin') + 'Chamada recebida</span></div>' +
+  const para = state.contas.length > 1 && c.conta ? ' · para ' + esc(ramalDaConta(c.conta)) : ''
+  return '<div class="cp ringing"><div class="cp-who">' + av(d, 'xl') + '<b>' + esc(d.n) + '</b><small>' + esc(c.r) + para + '</small></div><span class="cp-state">' + ic('pin') + 'Chamada recebida</span></div>' +
     '<div class="two"><button type="button" class="hangbtn" data-act="decline">' + ic('hang') + 'Recusar</button><button type="button" class="answerbtn" data-act="answer">' + ic('phone') + 'Atender</button></div>'
 }
 const perdida = h => h.entrada && !h.atendida
@@ -276,7 +288,7 @@ function renderRecent () {
     const g = dia(h.quando)
     if (g !== grupo) { grupo = g; body += '<div class="rgrp">' + esc(g) + '</div>' }
     const d = pessoa(h.ramal), [icon, c] = histIcone(h)
-    const sub = esc(h.ramal) + ' · <span class="k">' + histTipo(h) + '</span>' + (h.duracao ? ' · ' + fmt(h.duracao) : '') + (!h.atendida && !perdida(h) ? ' · ' + esc(h.fim) : '')
+    const sub = esc(h.ramal) + ' · <span class="k">' + histTipo(h) + '</span>' + (h.duracao ? ' · ' + fmt(h.duracao) : '') + (!h.atendida && !perdida(h) ? ' · ' + esc(h.fim) : '') + (state.contas.length > 1 ? ' · ' + (h.entrada ? 'para ' : 'pelo ') + esc(ramalDaConta(h.conta)) : '')
     body += '<div class="hrow"><button type="button" class="hmain' + (perdida(h) ? ' missed' : '') + '" data-act="fill" data-v="' + esc(h.ramal) + '" title="Pôr ' + esc(h.ramal) + ' no campo">' +
       '<span class="dir" style="--c:' + c + '">' + ic(icon) + '</span><span class="tx"><b>' + esc(d.n) + '</b><small>' + sub + '</small></span><span class="when">' + hora(h.quando) + '</span></button>' +
       '<button type="button" class="iconbtn sm go" data-act="call" data-v="' + esc(h.ramal) + '" aria-label="Ligar para ' + esc(d.n) + '" title="Ligar">' + ic('phone') + '</button>' +
@@ -357,7 +369,8 @@ async function send () {
   const r = state.open
   $('#sendbtn').disabled = true
   try {
-    const item = await invoke('mensagem', { destino: r, texto, conta: null })
+    const ultima = [...state.convs].reverse().find(m => m.ramal === r)
+    const item = await invoke('mensagem', { destino: r, texto, conta: ultima && state.contas.some(c => c.id === ultima.conta) ? ultima.conta : null })
     state.convs.push(item); state.drafts[r] = ''
     if (state.view === 'conversas' && state.open === r) { renderThread(); renderClist(); const t = $('#msg-in'); if (t) t.focus() }
   } catch (e) {
@@ -399,6 +412,7 @@ function formHTML () {
     campo('porta', 'Porta', ' inputmode="numeric" spellcheck="false"', 'UDP. A padrão do SIP é 5060.') +
     campo('senha', 'Senha', ' type="password"' + (nova ? ' required' : ' placeholder="Deixe vazio para manter a de agora"'), state.temChaveiro ? 'Fica no chaveiro do sistema.' : 'Esta máquina não tem chaveiro: fica num arquivo só seu.', 'largo') +
     '</div><div class="linha-sw">' + sw('form-registra', f.registra, 'Registrar a conta') + '<span>Registrar no PBX (para receber ligações e mensagens). Registrar tira o ramal de outro aparelho que esteja nele.</span></div>' +
+    '<div class="linha-sw">' + sw('form-principal', f.principal, 'Conta principal') + '<span>Conta principal: as ligações e mensagens saem por ela. No teclado, a setinha do Ligar troca na hora.</span></div>' +
     (f.erro ? '<div class="erro" role="alert">' + esc(f.erro) + '</div>' : '') +
     '<div class="acoes"><button type="button" class="btn" data-act="form-cancela">Cancelar</button><button type="submit" class="btn prim"' + (f.salvando ? ' disabled' : '') + '>' + (f.salvando ? 'Salvando…' : 'Salvar') + '</button></div></form>'
 }
@@ -418,7 +432,7 @@ function renderAjustes () {
 function secContas () {
   const linhas = state.contas.map(c => {
     const d = { r: c.usuario, n: c.nome || c.usuario, conhecido: !!c.nome, h: hue(c.usuario) }
-    const linha = '<div class="conta">' + av(d) + '<div class="tx"><b>' + esc(c.usuario) + (c.nome ? ' · ' + esc(c.nome) : '') + '</b><small><span class="mono">' + esc(c.dominio) + (c.porta !== 5060 ? ':' + c.porta : '') + '</span>' + regPill(c) + '<span>' + senhaOnde(c) + '</span></small></div>' +
+    const linha = '<div class="conta">' + av(d) + '<div class="tx"><b>' + esc(c.usuario) + (c.nome ? ' · ' + esc(c.nome) : '') + (c.principal && state.contas.length > 1 ? ' <span class="pill principal">Principal</span>' : '') + '</b><small><span class="mono">' + esc(c.dominio) + (c.porta !== 5060 ? ':' + c.porta : '') + '</span>' + regPill(c) + '<span>' + senhaOnde(c) + '</span></small></div>' +
       '<div class="acts">' + (['falhou', 'parada'].includes(c.registro) ? '<button type="button" class="iconbtn sm" data-act="reconecta" data-v="' + esc(c.id) + '" aria-label="Reconectar ' + esc(c.id) + '" title="Reconectar">' + ic('refresh') + '</button>' : '') +
       '<button type="button" class="iconbtn sm" data-act="edita-conta" data-v="' + esc(c.id) + '" aria-label="Editar ' + esc(c.id) + '" title="Editar">' + ic('edit') + '</button>' +
       '<button type="button" class="iconbtn sm" data-act="remove-conta" data-v="' + esc(c.id) + '" aria-label="Remover ' + esc(c.id) + '" title="Remover">' + ic('trash') + '</button></div></div>'
@@ -438,10 +452,17 @@ function secAudio () {
   const p = state.prefs, devs = state.devices
   const nomeDev = (lista, id) => { const d = id && (lista || []).find(x => x.id === id); return d ? d.nome : 'Padrão do sistema' }
   const pick = (k, titulo, lista) => '<button type="button" class="chip" data-act="pick" data-k="' + k + '" data-pop aria-haspopup="dialog" aria-expanded="false" title="' + titulo + '"><span>' + esc(nomeDev(lista, p[k])) + '</span>' + ic('caret', 'ic caret') + '</button>'
+  const t = state.testeMic
+  const teste = t
+    ? '<div class="medidor" aria-hidden="true"><span id="medidor-barra"></span></div><span class="tab muted" id="medidor-db">…</span><button type="button" class="btn sm" data-act="para-mic">Parar</button>'
+    : '<button type="button" class="btn sm" data-act="testa-mic">' + ic('mic') + 'Testar microfone</button>'
   return cabeca('Áudio', 'Por onde você fala e ouve nas ligações. "Padrão do sistema" segue o que está escolhido no computador.') +
     (state.devErro ? '<div class="erro" role="alert">' + esc(state.devErro) + '</div>' : '') +
     grupo('', item('Microfone', 'O que vai para o outro lado.', pick('microfone', 'Microfone', devs && devs.microfones)) +
-      item('Voz da ligação', 'Onde se ouve quem está do outro lado.', pick('altoFalante', 'Voz da ligação', devs && devs.altoFalantes)))
+      item('Testar o microfone', 'Fale alguma coisa: a barra mostra o que ele capta, por 10 segundos.', teste) +
+      '<div id="teste-aviso"></div>' +
+      item('Voz da ligação', 'Onde se ouve quem está do outro lado.', pick('altoFalante', 'Voz da ligação', devs && devs.altoFalantes)) +
+      item('Pausar música e vídeo', 'Ao atender, pausa o que estiver tocando; ao desligar, volta a tocar só o que foi pausado.', sw('pausarMusica', p.pausarMusica !== false, 'Pausar música e vídeo durante a ligação')))
 }
 function secToques () {
   const p = state.prefs, vol = p.volumeToque == null ? 50 : p.volumeToque
@@ -476,6 +497,18 @@ function secSobre () {
       item('Licença', 'Código aberto: github.com/JMoratelli/HexagonCall', '<span>GNU GPL 3</span>') +
       item('Arquivos', 'Contas, preferências, histórico e conversas, em texto. A senha fica no chaveiro do sistema.', '<span class="mono">' + esc(state.pasta) + '</span>'))
 }
+/** O teste do microfone: atualiza a barra sem redesenhar a tela (o evento vem a cada 100 ms). */
+function mostraNivel (a) {
+  const t = state.testeMic; if (!t) return
+  if (a) Object.assign(t, { db: a.db, mudo: a.mudo, erro: a.erro })
+  if (a && a.fim) { state.testeMic = null; if (a.erro) toast('O teste não abriu o microfone: ' + a.erro); if (state.view === 'ajustes' && state.secao === 'audio') renderView(); return }
+  const barra = $('#medidor-barra'), db = $('#medidor-db'), aviso = $('#teste-aviso')
+  if (barra) { barra.style.width = Math.max(0, Math.min(100, (t.db + 60) / 60 * 100)) + '%'; barra.dataset.forte = t.db > -40 ? '1' : '0' }
+  if (db) db.textContent = t.db <= -119 ? 'silêncio' : Math.round(t.db) + ' dB'
+  if (aviso) aviso.innerHTML = t.mudo
+    ? '<div class="alerta" role="status">' + ic('micoff') + '<div><b>Este microfone está mudo no sistema</b><span>Ou com o volume em zero.</span></div><button type="button" class="btn sm prim" data-act="tira-do-mudo">Tirar do mudo</button></div>'
+    : ''
+}
 async function carregaDispositivos () {
   try { state.devices = await invoke('dispositivos'); state.devErro = null } catch (e) { state.devErro = erroDe(e) }
   if (state.view === 'ajustes') renderView()
@@ -486,8 +519,8 @@ async function salvaPrefs () {
 function novoForm (c) {
   state.remover = null
   state.form = c
-    ? { idAntigo: c.id, usuario: c.usuario, nome: c.nome || '', dominio: c.dominio, porta: String(c.porta), registra: c.registra, senha: '', erro: null, salvando: false }
-    : { idAntigo: null, usuario: '', nome: '', dominio: '', porta: '5060', registra: true, senha: '', erro: null, salvando: false }
+    ? { idAntigo: c.id, usuario: c.usuario, nome: c.nome || '', dominio: c.dominio, porta: String(c.porta), registra: c.registra, principal: !!c.principal, senha: '', erro: null, salvando: false }
+    : { idAntigo: null, usuario: '', nome: '', dominio: '', porta: '5060', registra: true, principal: !state.contas.length, senha: '', erro: null, salvando: false }
 }
 async function salvaForm () {
   const f = state.form; if (!f || f.salvando) return
@@ -496,7 +529,7 @@ async function salvaForm () {
   if (!Number.isInteger(porta) || porta < 1 || porta > 65535) { f.erro = 'A porta vai de 1 a 65535.'; return renderView() }
   f.salvando = true; f.erro = null; renderView()
   try {
-    const e = await invoke('salva_conta', { conta: { idAntigo: f.idAntigo, usuario: f.usuario.trim(), dominio: f.dominio.trim(), porta, nome: f.nome.trim() || null, registra: f.registra, senha: f.senha || null } })
+    const e = await invoke('salva_conta', { conta: { idAntigo: f.idAntigo, usuario: f.usuario.trim(), dominio: f.dominio.trim(), porta, nome: f.nome.trim() || null, registra: f.registra, principal: f.principal, senha: f.senha || null } })
     aplica(e); state.form = null; toast('Conta salva. Conectando ao PBX…')
   } catch (e) {
     f.salvando = false; f.erro = erroDe(e)
@@ -515,7 +548,9 @@ async function startCall (r) {
   state.panel = 'call'; state.dial = ''
   if (state.view === 'chamadas') renderLeft(); renderStrip()
   try {
-    state.call.id = await invoke('liga', { destino: r, conta: null })
+    const conta = state.contaLigacao && state.contas.some(c => c.id === state.contaLigacao) ? state.contaLigacao : null
+    state.contaLigacao = null
+    state.call.id = await invoke('liga', { destino: r, conta })
   } catch (e) {
     state.call = null; refresh(); toast('Não liguei: ' + erroDe(e))
   }
@@ -604,9 +639,12 @@ function recebe (a) {
     case 'espera':
       if (daChamada(a.id)) { state.call.deles = a.sim; if (state.view === 'chamadas') renderLeft(); renderStrip() }
       break
+    case 'nivel': mostraNivel(a); break
     case 'microfone':
       if (daChamada(a.id)) {
         state.call.semSom = a.silencio
+        state.call.micMudo = a.mudo
+        state.call.alternativas = a.alternativas
         if (a.silencio && !state.devices) carregaDispositivos()
         if (state.view === 'chamadas') renderLeft(); renderStrip()
       }
@@ -659,6 +697,7 @@ function toast (msg) { const t = $('#toast'); t.textContent = msg; t.hidden = fa
 function renderView () { ({ chamadas: renderChamadas, conversas: renderConversas, ramais: renderRamais, ajustes: renderAjustes })[state.view]() }
 function refresh () { renderChrome(); renderStrip(); renderView() }
 function go (v) {
+  if (state.testeMic && v !== 'ajustes') invoke('para_teste_microfone').catch(() => {})
   state.view = VIEWS.includes(v) ? v : 'chamadas'
   closePop()
   if (state.view === 'ajustes' && !state.devices) carregaDispositivos()
@@ -726,6 +765,19 @@ document.addEventListener('click', async e => {
     case 'form-cancela': state.form = null; renderView(); break
     case 'remove-conta': state.form = null; state.remover = v; renderView(); break
     case 'remove-cancela': state.remover = null; renderView(); break
+    case 'tira-do-mudo':
+      if (await acao('tira_do_mudo', {}, 'Não tirei do mudo')) { toast('Microfone fora do mudo. Fale alguma coisa.'); if (state.call) { state.call.micMudo = false; if (state.view === 'chamadas') renderLeft() } if (state.testeMic) { state.testeMic.mudo = false; mostraNivel(null) } }
+      break
+    case 'usa-microfone':
+      try { await invoke('troca_microfone', { microfone: v }); state.prefs.microfone = v; toast('Microfone trocado. Fale alguma coisa.') } catch (err) { toast('Não troquei: ' + erroDe(err)) }
+      break
+    case 'testa-mic':
+      if (state.call) { toast('Durante a ligação, não.'); break }
+      state.testeMic = { db: -120, mudo: false, erro: null }
+      renderView()
+      try { await invoke('testa_microfone', { microfone: state.prefs.microfone || null }) } catch (err) { state.testeMic = null; toast('Não testei: ' + erroDe(err)); renderView() }
+      break
+    case 'para-mic': invoke('para_teste_microfone').catch(() => {}); break
     case 'reconecta': b.disabled = true; if (await acao('reconecta', { id: v }, 'Não reconectei')) toast('Conectando de novo ao PBX…'); break
     case 'remove-confirma':
       try { aplica(await invoke('remove_conta', { id: v })); toast('Conta removida.') } catch (err) { toast('Não removi: ' + erroDe(err)) }
@@ -733,6 +785,7 @@ document.addEventListener('click', async e => {
     case 'toggle': {
       const k = b.dataset.k
       if (k === 'form-registra') { state.form.registra = !state.form.registra; b.setAttribute('aria-checked', state.form.registra); break }
+      if (k === 'form-principal') { state.form.principal = !state.form.principal; b.setAttribute('aria-checked', state.form.principal); break }
       if (k === 'autostart') {
         try { state.autostart = await invoke('abrir_com_o_sistema', { sim: !state.autostart }) } catch (err) { toast('Não mudei: ' + erroDe(err)) }
         b.setAttribute('aria-checked', !!state.autostart); break
@@ -755,6 +808,19 @@ document.addEventListener('click', async e => {
     case 'toque': state.prefs.toque = v; salvaPrefs(); renderView(); break
     case 'minimizar': janela.minimize(); break
     case 'fechar': janela.close(); break
+    case 'pick-conta': {
+      const atual = contaDaLigacao()
+      openPop(b, '<div class="pop-title">Ligar por</div><div role="radiogroup">' + state.contas.map(c => {
+        const [t, cor] = REGISTRO[c.registro] || REGISTRO.parada
+        return '<button type="button" class="opt" role="radio" aria-checked="' + (atual && atual.id === c.id) + '" data-act="conta-ligacao" data-v="' + esc(c.id) + '"><span class="ck">' + ic('check') + '</span><span class="nm">' + esc(c.usuario) + (c.nome ? ' <small>· ' + esc(c.nome) + '</small>' : '') + (c.principal ? ' <small>· principal</small>' : '') + '</span><span class="dot" style="--c:' + cor + '" title="' + t + '"></span></button>'
+      }).join('') + '</div>', 'pick-conta')
+      break
+    }
+    case 'conta-ligacao': {
+      const c = state.contas.find(x => x.id === v)
+      state.contaLigacao = c && !c.principal ? v : null
+      closePop(); renderLeft(); break
+    }
     case 'pick': {
       const k = b.dataset.k
       const lista = state.devices ? (k === 'altoFalante' ? state.devices.altoFalantes : state.devices.microfones) : []

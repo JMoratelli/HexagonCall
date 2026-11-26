@@ -15,6 +15,8 @@
 //! atraso nao crescer ao longo da ligacao.
 
 pub mod conversao;
+pub mod diagnostico;
+mod pactl;
 pub mod toque;
 
 use conversao::{DoTelefone, ParaTelefone};

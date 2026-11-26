@@ -250,40 +250,14 @@ mod volume {
         pub mudo: bool,
     }
 
-    /// O primeiro porcentual de `pactl get-sink-volume` ("... /  80% / ...").
-    pub fn porcentagem(texto: &str) -> Option<String> {
-        texto
-            .split('/')
-            .map(str::trim)
-            .find(|p| p.ends_with('%') && p.trim_end_matches('%').parse::<u32>().is_ok())
-            .map(str::to_string)
-    }
-
-    #[cfg(target_os = "linux")]
-    fn pactl(args: &[&str]) -> Option<String> {
-        let saida = std::process::Command::new("pactl")
-            .args(args)
-            .output()
-            .ok()?;
-        saida
-            .status
-            .success()
-            .then(|| String::from_utf8_lossy(&saida.stdout).into_owned())
-    }
+    use crate::pactl::{esta_mudo, nome, porcentagem, roda as pactl};
 
     /// O nome da saida para o pactl: o id do PulseAudio sem o prefixo, ou a
     /// saida padrao. Um id do ALSA cru nao tem como mexer no volume.
     pub fn nome_da_saida(id: Option<&str>) -> Vec<String> {
-        match id {
-            None => vec!["@DEFAULT_SINK@".into()],
-            Some(id) => id
-                .strip_prefix("pulseaudio:")
-                .map(|n| vec![n.to_string()])
-                .unwrap_or_default(),
-        }
+        nome(id, "@DEFAULT_SINK@").into_iter().collect()
     }
 
-    #[cfg(target_os = "linux")]
     pub fn todas() -> Vec<String> {
         pactl(&["list", "short", "sinks"])
             .map(|lista| {
@@ -296,13 +270,11 @@ mod volume {
             .unwrap_or_default()
     }
 
-    #[cfg(target_os = "linux")]
     pub fn sobe(saidas: &[String]) -> Vec<Antes> {
         let mut antes = Vec::new();
         for nome in saidas.iter().map(String::as_str) {
             let volume = pactl(&["get-sink-volume", nome]).and_then(|v| porcentagem(&v));
-            let mudo = pactl(&["get-sink-mute", nome])
-                .is_some_and(|m| m.contains("yes") || m.contains("sim"));
+            let mudo = pactl(&["get-sink-mute", nome]).is_some_and(|m| esta_mudo(&m));
             if let Some(volume) = volume {
                 antes.push(Antes {
                     saida: nome.to_string(),
@@ -316,26 +288,12 @@ mod volume {
         antes
     }
 
-    #[cfg(target_os = "linux")]
     pub fn devolve(antes: &[Antes]) {
         for a in antes {
             let _ = pactl(&["set-sink-volume", &a.saida, &a.volume]);
             let _ = pactl(&["set-sink-mute", &a.saida, if a.mudo { "1" } else { "0" }]);
         }
     }
-
-    #[cfg(not(target_os = "linux"))]
-    pub fn todas() -> Vec<String> {
-        Vec::new()
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    pub fn sobe(_saidas: &[String]) -> Vec<Antes> {
-        Vec::new()
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    pub fn devolve(_antes: &[Antes]) {}
 }
 
 #[cfg(test)]
@@ -381,12 +339,5 @@ mod testes {
             vec!["alsa_output.usb-x.analog-stereo".to_string()]
         );
         assert!(volume::nome_da_saida(Some("alsa:sysdefault:CARD=X")).is_empty());
-    }
-
-    #[test]
-    fn le_a_porcentagem_do_pactl() {
-        let texto = "Volume: front-left: 52428 /  80% / -5,81 dB,   front-right: 52428 /  80% / -5,81 dB\n        balance 0,00\n";
-        assert_eq!(volume::porcentagem(texto).as_deref(), Some("80%"));
-        assert_eq!(volume::porcentagem("lixo"), None);
     }
 }

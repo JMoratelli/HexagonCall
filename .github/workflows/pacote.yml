@@ -1,0 +1,53 @@
+# Hexagon Call - Copyright (c) 2026 Jurandir Moratelli (@JJMoratelli).
+# O pacote para instalar (docs/estado.md, "Distribuicao e atualizacao"):
+#   - windows: o HexagonCall.exe em release, com o sha256 ao lado;
+#   - (depois) linux: a AppImage, e o instalador do Windows com o atualizador.
+# Roda a mao (Actions > Pacote > Run workflow) ou numa tag de versao (v*). Por
+# enquanto so guarda o resultado como artefato do GitHub (14 dias).
+name: Pacote
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  windows:
+    runs-on: windows-2025
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Compilador do rust-toolchain.toml
+        shell: bash
+        run: |
+          versao="$(sed -n 's/^channel = "\(.*\)"/\1/p' rust-toolchain.toml)"
+          rustup toolchain install "$versao" --profile minimal
+          rustc --version
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: pacote
+
+      - name: Compila a janela (release)
+        run: cargo build --release --locked -p janela
+
+      - name: Junta o exe e o sha256
+        shell: bash
+        run: |
+          mkdir -p saida
+          cp target/release/janela.exe saida/HexagonCall.exe
+          (cd saida && sha256sum HexagonCall.exe > HexagonCall.exe.sha256)
+          cat saida/HexagonCall.exe.sha256
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: HexagonCall-windows
+          path: saida/
+          retention-days: 14

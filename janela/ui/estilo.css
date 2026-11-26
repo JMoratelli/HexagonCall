@@ -64,7 +64,7 @@
 }
 /* O esquema vermelho (o M Calls, como a central do M Tickets): a cor principal e a colmeia em âmbar e vermelho */
 :root[data-scheme="red"] {
-  --primary: #c62828; --primary-text: #b71c1c; --ring: #c62828; --art-a: #f5b301; --art-b: #c62828; --inverse-accent: #ff8a80;
+  --primary: #c62828; --primary-text: #b71c1c; --ring: #c62828; --art-a: #f9e138; --art-b: #ed3237; --inverse-accent: #ff8a80;
   --side-active: rgba(198, 40, 40, .1); --side-active-fg: #b71c1c;
 }
 @media (prefers-color-scheme: dark) {

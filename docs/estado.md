@@ -89,4 +89,7 @@ fora do git (só na máquina de quem testa). Medido na bancada:
    desregistrar (`Ua::abandona`): no chan_sip, um Expires 0 apagaria também o registro novo. Com ligação em
    andamento, depois que ela acabar. "Reconectar" na conta faz o mesmo à mão. Falta conferir de verdade: suspender
    o computador e trocar de rede com o app aberto.
-   Falta: os ícones dos dois flavors e o pacote (AppImage, instalador do Windows) com a atualização.
+   Ícones (26/11, escolhidos numa prova com cinco opções): o hexágono com sinal, verde no Hexagon Call (H2, o do
+   executável: `janela/icons/icon.png` e `.ico`) e vermelho e amarelo no M Calls (M2, `janela/icons/m-calls.*`,
+   aplicado na janela e na bandeja quando o flavor é mcalls). Sem a logo do Machadão: o repositório é público.
+   Falta: o pacote (AppImage, instalador do Windows) com a atualização.

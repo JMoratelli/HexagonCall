@@ -20,7 +20,7 @@ nucleo = { path = "../nucleo" }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1"
 som = { path = "../som" }
-tauri = { version = "2.12.7", features = ["tray-icon"] }
+tauri = { version = "2.12.7", features = ["tray-icon", "image-png"] }
 tauri-plugin-autostart = "2.7.0"
 tauri-plugin-single-instance = "2.5.5"
 tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "sync", "time"] }

@@ -42,6 +42,21 @@ pub fn titulo(flavor: Flavor) -> &'static str {
     }
 }
 
+/// O icone do flavor: o do Hexagon Call vai no executavel (icons/icon.png);
+/// o do M Calls entra na hora, pelo arquivo de preferencias, sem compilar de
+/// novo.
+fn icone(app: &tauri::App, flavor: Flavor) -> Option<tauri::image::Image<'static>> {
+    match flavor {
+        Flavor::Hexagon => app
+            .default_window_icon()
+            .cloned()
+            .map(tauri::image::Image::to_owned),
+        Flavor::Mcalls => tauri::image::Image::from_bytes(include_bytes!("../icons/m-calls.png"))
+            .map_err(|e| warn!("icone do M Calls: {e}"))
+            .ok(),
+    }
+}
+
 // ---- Comandos da tela ----
 
 #[tauri::command]
@@ -207,9 +222,7 @@ fn bandeja(app: &tauri::App, flavor: Flavor) -> tauri::Result<()> {
     )?;
     let sair = MenuItem::with_id(app, "sair", "Sair", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&abrir, &PredefinedMenuItem::separator(app)?, &sair])?;
-    let icone = app
-        .default_window_icon()
-        .cloned()
+    let icone = icone(app, flavor)
         .ok_or_else(|| tauri::Error::InvalidIcon(std::io::Error::other("sem icone")))?;
     TrayIconBuilder::with_id("hexagon-call")
         .icon(icone)
@@ -278,6 +291,11 @@ fn main() -> std::process::ExitCode {
             bandeja(app, flavor)?;
             if let Some(w) = app.get_webview_window("principal") {
                 let _ = w.set_title(titulo(flavor));
+                if flavor == Flavor::Mcalls
+                    && let Some(i) = icone(app, flavor)
+                {
+                    let _ = w.set_icon(i);
+                }
             }
             if !na_bandeja {
                 mostra(app.handle());

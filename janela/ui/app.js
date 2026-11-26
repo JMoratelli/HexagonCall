@@ -53,7 +53,11 @@ const ICONS = {
   gear: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>'
 }
 const ic = (n, cls) => '<svg class="' + (cls || 'ic') + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + ICONS[n] + '</svg>'
-const MARK = '<svg viewBox="0 0 28 28" aria-hidden="true"><path d="M8 3.5h12l6 10.5-6 10.5H8L2 14z" fill="var(--art-a)"/><path d="M10.5 9h7l3.5 5-3.5 5h-7L7 14z" fill="var(--art-b)"/></svg>'
+// A marca: o hexagono com sinal dos icones (H2 e M2, escolhidos em 26/11), nas cores do flavor.
+const MARK = '<svg viewBox="0 0 512 512" aria-hidden="true"><g transform="translate(256 256)">' +
+  '<polygon points="-108,-188 108,-188 216,0 108,188 -108,188 -216,0" fill="var(--art-b)" stroke="var(--art-b)" stroke-width="52" stroke-linejoin="round"/>' +
+  '<g transform="translate(-118 -96) scale(8)"><path d="' + PHONE + '" fill="#fff" stroke="#fff" stroke-width="1.4" stroke-linejoin="round"/></g>' +
+  '<path d="M30 -118a90 90 0 0 1 88 88M30 -64a36 36 0 0 1 34 34" fill="none" stroke="var(--art-a)" stroke-width="30" stroke-linecap="round"/></g></svg>'
 
 const VIEWS = ['chamadas', 'conversas', 'ramais', 'ajustes']
 const state = {

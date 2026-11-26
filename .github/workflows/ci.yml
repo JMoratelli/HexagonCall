@@ -1,0 +1,86 @@
+# Hexagon Call - Copyright (c) 2026 Jurandir Moratelli (@JJMoratelli).
+# Verificacao automatica (docs/ci.md), em todo push e todo pedido para o main:
+#   - linux: fmt, clippy -D warnings e todos os testes, inclusive o motor de
+#     ponta a ponta (dois UAs e um servidor com senha em 127.0.0.1, sem PBX) e
+#     a janela (Tauri) compilando;
+#   - windows: compila e roda os mesmos testes (o app vai rodar nos dois);
+#   - dependencias: licencas compativeis com a GPL e avisos de seguranca
+#     (cargo-deny, deny.toml).
+# O hook de pre-push (.githooks/pre-push) roda o do linux antes de subir; aqui
+# e a confirmacao num checkout limpo. O teste contra o PBX de verdade nao roda
+# aqui: e a bancada, na rede da empresa, com a senha digitada na hora.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Compilador do rust-toolchain.toml
+        shell: bash
+        run: |
+          versao="$(sed -n 's/^channel = "\(.*\)"/\1/p' rust-toolchain.toml)"
+          rustup toolchain install "$versao" --profile minimal --component clippy,rustfmt
+          rustc --version
+
+      - name: Cabecalhos do sistema (ALSA para o som; WebKitGTK, bandeja e menu para a janela)
+        run: >-
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends pkg-config
+          libasound2-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: fmt
+        run: cargo fmt --all --check
+
+      - name: clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - name: testes
+        run: cargo test --workspace --locked
+
+  windows:
+    runs-on: windows-2025
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Compilador do rust-toolchain.toml
+        shell: bash
+        run: |
+          versao="$(sed -n 's/^channel = "\(.*\)"/\1/p' rust-toolchain.toml)"
+          rustup toolchain install "$versao" --profile minimal --component clippy,rustfmt
+          rustc --version
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: testes
+        run: cargo test --workspace --locked
+
+  dependencias:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check

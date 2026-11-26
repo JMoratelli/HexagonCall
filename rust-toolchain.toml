@@ -1,0 +1,6 @@
+# Fixo, como no kioskd: um compilador que muda sozinho muda o binario sem
+# ninguem pedir. Subir de versao e um commit.
+[toolchain]
+channel = "1.100.0"
+components = ["clippy", "rustfmt"]
+profile = "minimal"

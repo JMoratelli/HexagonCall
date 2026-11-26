@@ -1,0 +1,61 @@
+#!/bin/bash
+# =============================================================================
+#  pre-push  -  o portao antes de subir (o mesmo do kioskd)
+#  Hexagon Call - @JJMoratelli
+# =============================================================================
+#  Testa O COMMIT que vai subir, num worktree limpo: uma mudanca nao commitada
+#  na pasta de trabalho nao mascara o resultado. Roda o que o job linux do CI
+#  roda: fmt, clippy -D warnings e os testes.
+#
+#  Ativar uma vez por clone:   git config core.hooksPath .githooks
+#
+#  Recursos: a maquina e de quem trabalha nela (regra dos 80%): taskset nos 12
+#  primeiros nucleos, CARGO_BUILD_JOBS=12 e nice.
+# =============================================================================
+set -uo pipefail
+
+ZERO=0000000000000000000000000000000000000000
+RAIZ="$(git rev-parse --show-toplevel)" || exit 1
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX
+
+falha() { printf '\033[0;31mpre-push: %s\033[0m\n' "$*" >&2; }
+info()  { printf '\033[0;33mpre-push:\033[0m %s\n' "$*" >&2; }
+
+# Cache de compilacao fora do worktree: sem ele, cada push recompila tudo.
+export CARGO_TARGET_DIR="${HOME}/.cache/hexagon-call-prepush"
+export CARGO_BUILD_JOBS=12
+NUCLEOS="0-11"
+[ "$(nproc)" -le 12 ] && NUCLEOS="0-$(( $(nproc) - 1 ))"
+
+testa_commit() {
+  local sha="$1" wt rc=0
+  wt="$(mktemp -d "${TMPDIR:-/tmp}/pre-push.XXXXXX")"
+  if ! git -C "${RAIZ}" worktree add --detach --quiet "${wt}" "${sha}"; then
+    falha "nao consegui montar o worktree de ${sha:0:12}"
+    rm -rf "${wt}"
+    return 1
+  fi
+  info "testando ${sha:0:12} num worktree limpo"
+  (
+    cd "${wt}" || exit 1
+    taskset -c "${NUCLEOS}" nice -n 10 cargo fmt --all --check &&
+    taskset -c "${NUCLEOS}" nice -n 10 cargo clippy -q --workspace --all-targets --locked -- -D warnings &&
+    taskset -c "${NUCLEOS}" nice -n 10 cargo test -q --workspace --locked
+  ) || rc=1
+  git -C "${RAIZ}" worktree remove --force "${wt}" 2>/dev/null || rm -rf "${wt}"
+  return "${rc}"
+}
+
+while read -r _local_ref local_sha _remote_ref remote_sha; do
+  [ "${local_sha}" = "${ZERO}" ] && continue   # apagando ramo remoto
+  if [ "${remote_sha}" != "${ZERO}" ] && ! git merge-base --is-ancestor "${remote_sha}" "${local_sha}" 2>/dev/null; then
+    falha "o push reescreveria o remoto (${remote_sha:0:12} nao e ancestral); recusado"
+    exit 1
+  fi
+  if ! testa_commit "${local_sha}"; then
+    falha "fmt, clippy ou testes falharam em ${local_sha:0:12}; nada subiu"
+    exit 1
+  fi
+done
+info "tudo verde"
+exit 0

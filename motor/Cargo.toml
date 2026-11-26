@@ -1,0 +1,26 @@
+[package]
+name = "motor"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+hound = "3.5.1"
+nucleo = { path = "../nucleo" }
+rand = "0.10.4"
+rsipstack = { version = "0.8.8", default-features = false, features = ["platform-tokio", "std"] }
+thiserror = "2.0.21"
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "net", "time", "sync"] }
+tokio-util = "0.7.20"
+tracing = "0.1.44"
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+rsipstack = { version = "0.8.8", default-features = false, features = ["platform-tokio", "std"] }
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "net", "time", "sync", "test-util"] }
+tokio-util = "0.7.20"

@@ -1,0 +1,20 @@
+<!doctype html>
+<!-- Hexagon Call - Copyright (c) 2026 Jurandir Moratelli (@JJMoratelli). Licenca GNU GPL 3 ou posterior.
+     A janela do softphone. O desenho e o do prototipo (docs/prototipos/softphone.html); os dados vem do
+     telefone em Rust pelos comandos do Tauri (app.js). -->
+<html lang="pt-BR" data-scheme="red">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M Calls</title>
+<link rel="stylesheet" href="estilo.css">
+</head>
+<body>
+<div class="abar" id="abar"></div>
+<div class="strip" id="strip" role="region" aria-label="Ligação em andamento" hidden></div>
+<div class="content" id="content"></div>
+<div class="pop" id="pop" role="dialog" aria-label="Opções" hidden></div>
+<div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+<script src="app.js"></script>
+</body>
+</html>

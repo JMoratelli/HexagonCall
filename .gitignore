@@ -1,0 +1,5 @@
+/target
+# Audio de bancada (fala gerada, gravacoes das ligacoes de teste): fica fora.
+*.wav
+/janela/gen
+/.env

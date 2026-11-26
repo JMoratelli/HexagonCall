@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "padrao",
+  "description": "A janela principal: os comandos do telefone e os avisos que chegam dele.",
+  "windows": ["principal"],
+  "permissions": ["core:default"]
+}

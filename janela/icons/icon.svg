@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 28 28" width="512" height="512">
+  <!-- A colmeia do M Calls: hexagono ambar por fora, vermelho por dentro (o mesmo MARK da janela). -->
+  <path d="M8 3.5h12l6 10.5-6 10.5H8L2 14z" fill="#f5b301"/>
+  <path d="M10.5 9h7l3.5 5-3.5 5h-7L7 14z" fill="#c62828"/>
+</svg>

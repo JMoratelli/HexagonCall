@@ -1,0 +1,51 @@
+# Hexagon Call - Copyright (c) 2026 Jurandir Moratelli (@JJMoratelli).
+# Licenca GNU GPL 3 ou posterior (LICENSE na raiz do repositorio).
+#
+# O softphone (o M Calls e o flavor de uso interno). Cinco crates:
+#   nucleo   logica pura, sem IO: contas, G.711, RTP, jitter, SDP, presenca
+#            e o motivo de cada fim de ligacao. Testado sem rede e sem som.
+#   motor    o SIP e a midia de verdade, em cima do rsipstack: registro,
+#            mensagens, presenca, ligacoes e o RTP. Uma conta, um endpoint:
+#            varias contas no mesmo aparelho sao varios endpoints.
+#   som      microfone e alto-falante (cpal), com a troca de taxa entre a
+#            placa (48 kHz) e o telefone (8 kHz). Fica fora do motor para o
+#            motor seguir testavel sem placa de som.
+#   bancada  linha de comando para testar o motor contra um PBX de verdade.
+#   janela   o app: Tauri 2 com a tela em HTML puro (janela/ui), no molde da
+#            Usina do LinuxMachines; contas e historico em texto.
+[workspace]
+resolver = "3"
+members = ["nucleo", "motor", "som", "bancada", "janela"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.100"
+authors = ["Jurandir Moratelli (@JJMoratelli)"]
+license = "GPL-3.0-or-later"
+
+# As mesmas travas do kioskd: o que da para pegar na compilacao nao chega na
+# mesa de ninguem. O CI e o hook rodam o clippy com -D warnings.
+[workspace.lints.rust]
+unsafe_code = "forbid"
+unused_must_use = "deny"
+
+[workspace.lints.clippy]
+# Panico no motor e ligacao que cai no meio.
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+indexing_slicing = "deny"
+todo = "deny"
+unimplemented = "deny"
+dbg_macro = "deny"
+# Audio e protocolo vivem de conversao numerica: toda conversao que perde
+# valor tem de ser escrita de proposito.
+cast_possible_truncation = "deny"
+cast_sign_loss = "deny"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+strip = true

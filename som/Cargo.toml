@@ -1,0 +1,19 @@
+[package]
+name = "som"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+cpal = "0.18.2"
+motor = { path = "../motor" }
+rtrb = "0.4.1"
+rubato = "5.1.0"
+thiserror = "2.0.21"
+tracing = "0.1.44"
+
+[lints]
+workspace = true

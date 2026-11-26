@@ -1,0 +1,6 @@
+# Nos testes, unwrap/expect/indexacao sao a forma honesta de dizer "isto tem
+# que existir": se nao existir, o teste falha, que e o que se quer.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+allow-indexing-slicing-in-tests = true

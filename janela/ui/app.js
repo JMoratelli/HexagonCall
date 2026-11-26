@@ -41,6 +41,7 @@ const ICONS = {
   edit: '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/>',
   trash: '<path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
+  users: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/>',
   user: '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
   bell: '<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>',
   sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
@@ -125,7 +126,6 @@ function renderChrome () {
   else delete raiz.dataset.theme
   document.title = brandName()
   const unread = Object.values(state.naoLidas).reduce((a, b) => a + b, 0)
-  const tabs = [['chamadas', 'Chamadas', state.missedNew, 'var(--crit)'], ['conversas', 'Conversas', unread, 'var(--primary)'], ['ramais', 'Ramais']]
   const c = contaPrincipal()
   let status
   if (!c) status = '<button type="button" class="status" style="--c:var(--warn)" data-act="nova-conta" title="Cadastre o seu ramal"><span class="dot"></span>Sem conta</button>'
@@ -133,12 +133,15 @@ function renderChrome () {
     const [t, cor] = REGISTRO[c.registro] || REGISTRO.parada
     status = '<button type="button" class="status" style="--c:' + cor + '" data-act="go" data-v="ajustes" title="' + esc(c.id + ' · ' + t + (c.detalhe ? ': ' + c.detalhe : '')) + '"><span class="dot"></span>' + esc(c.usuario) + (state.contas.length > 1 ? ' +' + (state.contas.length - 1) : '') + '</button>'
   }
-  $('#abar').innerHTML = '<span class="brand" data-tauri-drag-region>' + MARK + '<span>' + brandName() + '</span></span>' +
-    '<nav class="segs" aria-label="Abas">' + tabs.map(([v, label, n, tone]) => '<button type="button" class="seg" data-act="go" data-v="' + v + '"' + (state.view === v ? ' aria-current="page"' : '') + '>' + label + (n ? '<span class="n" style="--c:' + tone + '">' + n + '</span>' : '') + '</button>').join('') + '</nav>' +
-    status +
-    '<button type="button" class="iconbtn" data-act="gear" aria-label="Configurações" title="Configurações" aria-pressed="' + (state.view === 'ajustes') + '">' + ic('gear') + '</button>' +
+  // A barra de cima e a da janela: marca, conta e os botoes (arrasta pelo vazio).
+  $('#abar').innerHTML = '<span class="brand" data-tauri-drag-region>' + MARK + '<span>' + brandName() + '</span></span>' + status +
     '<span class="wbtns"><button type="button" class="iconbtn ghost sm" data-act="minimizar" aria-label="Minimizar" title="Minimizar">' + ic('min') + '</button>' +
     '<button type="button" class="iconbtn ghost sm fecha" data-act="fechar" aria-label="Fechar (continua na bandeja)" title="Fechar (continua na bandeja)">' + ic('x') + '</button></span>'
+  // As secoes no trilho da esquerda (pedido de 26/11); as configuracoes no pe.
+  const botao = (v, label, icone, n, tom) => '<button type="button" data-act="go" data-v="' + v + '"' + (state.view === v ? ' aria-current="page"' : '') + ' title="' + label + '">' +
+    '<span class="icone">' + ic(icone) + (n ? '<span class="n" style="--c:' + tom + '">' + n + '</span>' : '') + '</span><span>' + label + '</span></button>'
+  $('#rail').innerHTML = botao('chamadas', 'Chamadas', 'phone', state.missedNew, 'var(--crit)') + botao('conversas', 'Conversas', 'chat', unread, 'var(--primary)') + botao('ramais', 'Ramais', 'users') +
+    '<span class="espaco"></span>' + botao('ajustes', 'Ajustes', 'gear', contaComProblema() ? '!' : 0, 'var(--warn)')
 }
 
 // ---- A faixa da ligacao (nas abas que nao sao Chamadas) ----

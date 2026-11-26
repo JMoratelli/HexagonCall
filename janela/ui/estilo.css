@@ -97,9 +97,9 @@ button { font: inherit; color: inherit; }
 kbd { display: inline-block; padding: 0 5px; border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 5px; font: 600 11px/16px var(--f-body); color: var(--foreground); background: var(--card); }
 
 /* ---- A janela: a barra do app, a faixa da ligacao e o conteudo ---- */
-.abar { display: flex; align-items: center; gap: 10px; flex-shrink: 0; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+.abar { display: flex; align-items: center; gap: 10px; flex-shrink: 0; height: 44px; padding: 0 8px 0 12px; border-bottom: 1px solid var(--border); }
 .brand { display: flex; align-items: center; gap: 8px; padding: 0 4px 0 2px; font: 600 14.5px/1.2 var(--f-display); white-space: nowrap; }
-.brand svg { width: 24px; height: 24px; }
+.brand svg { width: 22px; height: 22px; }
 .status { margin-left: auto; display: inline-flex; align-items: center; gap: 7px; height: 30px; padding: 0 11px; border-radius: 999px; font-size: 12.5px; font-weight: 600; color: var(--ok); background: color-mix(in srgb, var(--ok) var(--tint), var(--card)); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; background: var(--c, currentColor); }
 .content { flex: 1; min-height: 0; display: flex; flex-direction: column; }
@@ -416,4 +416,18 @@ body { border: 1px solid var(--border); }
 .toq .iconbtn { color: var(--primary-text); }
 .tools .search { flex: 1 1 260px; }
 .rodape { margin: 0; padding: 8px 14px 12px; border-top: 1px solid var(--line); }
+
+/* ---- O trilho das secoes, a esquerda (a barra de cima ficou so com marca, conta e janela) ---- */
+.abar .status { height: 28px; }
+.corpo { flex: 1; min-height: 0; display: flex; }
+.principal { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.rail { width: 76px; flex-shrink: 0; display: flex; flex-direction: column; gap: 4px; padding: 10px 7px; border-right: 1px solid var(--border); background: var(--thread); }
+.rail .espaco { flex: 1; }
+.rail button { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 8px 2px 7px; border: 0; border-radius: 12px; background: none; cursor: pointer; color: var(--muted-fg); font-size: 11px; font-weight: 600; line-height: 1.1; }
+.rail button:hover { background: var(--muted); color: var(--foreground); }
+.rail button[aria-current="page"] { color: var(--side-active-fg); }
+.rail .icone { position: relative; display: grid; place-items: center; width: 40px; height: 30px; border-radius: 10px; transition: background .15s; }
+.rail button[aria-current="page"] .icone { background: var(--primary); color: var(--on-primary); }
+.rail .icone .ic { width: 19px; height: 19px; }
+.rail .n { position: absolute; top: -5px; right: -3px; min-width: 17px; height: 17px; padding: 0 4px; border-radius: 999px; display: grid; place-items: center; font-size: 10.5px; font-weight: 700; font-variant-numeric: tabular-nums; color: #ffffff; background: var(--c); box-shadow: 0 0 0 2px var(--thread); }
 

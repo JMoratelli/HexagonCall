@@ -11,8 +11,13 @@
 </head>
 <body>
 <div class="abar" id="abar" data-tauri-drag-region></div>
-<div class="strip" id="strip" role="region" aria-label="Ligação em andamento" hidden></div>
-<div class="content" id="content"></div>
+<div class="corpo">
+  <nav class="rail" id="rail" aria-label="Seções"></nav>
+  <div class="principal">
+    <div class="strip" id="strip" role="region" aria-label="Ligação em andamento" hidden></div>
+    <div class="content" id="content"></div>
+  </div>
+</div>
 <div class="pop" id="pop" role="dialog" aria-label="Opções" hidden></div>
 <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
 <script src="app.js"></script>

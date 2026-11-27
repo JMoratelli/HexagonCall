@@ -135,6 +135,12 @@ pub struct Preferencias {
     pub gravar: bool,
     /// Por quantos dias uma gravacao fica; 0 guarda sempre.
     pub guardar_gravacoes: u32,
+    /// Tirar o eco do alto-falante no microfone (som::eco; ligado de padrao).
+    pub cancelar_eco: bool,
+    /// Tirar o ruido constante do microfone (ligado de padrao).
+    pub reduzir_ruido: bool,
+    /// Limpar o que chega do outro lado (RNNoise; desligado de padrao).
+    pub voz_nitida: bool,
 }
 
 impl Default for Preferencias {
@@ -153,6 +159,9 @@ impl Default for Preferencias {
             pausar_musica: true,
             gravar: false,
             guardar_gravacoes: 90,
+            cancelar_eco: true,
+            reduzir_ruido: true,
+            voz_nitida: false,
         }
     }
 }
@@ -796,6 +805,9 @@ mod testes {
             pausar_musica: false,
             gravar: true,
             guardar_gravacoes: 30,
+            cancelar_eco: false,
+            reduzir_ruido: true,
+            voz_nitida: true,
         };
         g.grava_preferencias(&p).unwrap();
         assert_eq!(g.preferencias(), p);

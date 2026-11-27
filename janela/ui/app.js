@@ -545,6 +545,10 @@ function secAudio () {
       '<div id="teste-aviso"></div>' +
       item('Voz da ligação', 'Onde se ouve quem está do outro lado.', pick('altoFalante', 'Voz da ligação', devs && devs.altoFalantes)) +
       item('Pausar música e vídeo', 'Ao atender, pausa o que estiver tocando; ao desligar, volta a tocar só o que foi pausado.', sw('pausarMusica', p.pausarMusica !== false, 'Pausar música e vídeo durante a ligação'))) +
+    grupo('Qualidade da voz',
+      item('Cancelar o eco', 'Com caixa de som em vez de headset, o outro lado não ouve a própria voz de volta.', sw('cancelarEco', p.cancelarEco !== false, 'Cancelar o eco')) +
+      item('Reduzir o ruído do microfone', 'Tira o ruído constante daqui (ventilador, ar-condicionado) do que vai para o outro lado.', sw('reduzirRuido', p.reduzirRuido !== false, 'Reduzir o ruído do microfone')) +
+      item('Voz mais nítida', 'Limpa o ruído do que chega do outro lado. Vale a partir da próxima ligação, como as outras.', sw('vozNitida', p.vozNitida, 'Voz mais nítida'))) +
     secGravacao()
 }
 function secGravacao () {

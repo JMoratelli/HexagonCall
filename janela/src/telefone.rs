@@ -33,6 +33,9 @@ struct Audios {
     destino: Box<dyn Destino>,
     medidor: Option<som::Medidor>,
     faltando: Faltando,
+    /// O que o alto-falante tocou, para o microfone tirar o eco (e o
+    /// microfone trocado no meio da ligacao tambem).
+    referencia: som::eco::Referencia,
 }
 
 /// O dispositivo que nao abriu, com o motivo.
@@ -141,6 +144,8 @@ struct Chamada {
     faltando: Faltando,
     /// O arquivo da gravacao, se esta gravando.
     gravacao: Option<String>,
+    /// A referencia do eco desta ligacao (o microfone trocado usa a mesma).
+    referencia: Option<som::eco::Referencia>,
 }
 
 /// Uma conta como a tela mostra.
@@ -1124,6 +1129,7 @@ impl Telefone {
                 espera: false,
                 faltando: Faltando::default(),
                 gravacao: None,
+                referencia: None,
             },
         );
         if ocupado {
@@ -1232,11 +1238,21 @@ impl Telefone {
         Ok((l.conta.id(), ua))
     }
 
+    fn limpeza(p: &Preferencias) -> som::eco::Limpeza {
+        som::eco::Limpeza {
+            eco: p.cancelar_eco,
+            ruido: p.reduzir_ruido,
+            nitida: p.voz_nitida,
+        }
+    }
+
     fn audio(&self) -> Audios {
         let p = self.guarda.preferencias();
+        let limpeza = Self::limpeza(&p);
+        let referencia = som::eco::Referencia::nova();
         let mut faltando = Faltando::default();
         let (fonte, medidor): (Box<dyn Fonte>, _) =
-            match som::Microfone::abre(p.microfone.as_deref()) {
+            match som::Microfone::abre_limpo(p.microfone.as_deref(), limpeza, Some(&referencia)) {
                 Ok(mic) => {
                     let medidor = mic.medidor();
                     (Box::new(mic), Some(medidor))
@@ -1247,7 +1263,11 @@ impl Telefone {
                     (Box::new(Silencio), None)
                 }
             };
-        let destino: Box<dyn Destino> = match som::AltoFalante::abre(p.alto_falante.as_deref()) {
+        let destino: Box<dyn Destino> = match som::AltoFalante::abre_limpo(
+            p.alto_falante.as_deref(),
+            limpeza,
+            Some(&referencia),
+        ) {
             Ok(fone) => Box::new(fone),
             Err(e) => {
                 warn!("a ligacao segue sem alto-falante: {e}");
@@ -1260,6 +1280,7 @@ impl Telefone {
             destino,
             medidor,
             faltando,
+            referencia,
         }
     }
 
@@ -1271,7 +1292,11 @@ impl Telefone {
             .find(|(_, c)| c.atendida)
             .map(|(id, _)| id.clone())
             .ok_or("nenhuma ligação em andamento")?;
-        let mic = som::Microfone::abre(microfone.as_deref())
+        let referencia = trava(&self.chamadas)
+            .get(&id)
+            .and_then(|c| c.referencia.clone());
+        let limpeza = Self::limpeza(&self.guarda.preferencias());
+        let mic = som::Microfone::abre_limpo(microfone.as_deref(), limpeza, referencia.as_ref())
             .map_err(|e| format!("não abri esse microfone: {e}"))?;
         let medidor = mic.medidor();
         self.ua_da_chamada(&id)?
@@ -1321,6 +1346,7 @@ impl Telefone {
                 espera: false,
                 faltando: a.faltando,
                 gravacao: None,
+                referencia: Some(a.referencia),
             },
         );
         Ok(id)
@@ -1335,6 +1361,7 @@ impl Telefone {
         // faltou sai junto com ele.
         if let Some(c) = trava(&self.chamadas).get_mut(id) {
             c.faltando = a.faltando;
+            c.referencia = Some(a.referencia.clone());
         }
         ua.atende(id, a.fonte, a.destino)
             .await

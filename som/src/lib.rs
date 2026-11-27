@@ -16,6 +16,7 @@
 
 pub mod conversao;
 pub mod diagnostico;
+pub mod eco;
 pub mod gravacao;
 mod pactl;
 pub mod toque;
@@ -23,6 +24,7 @@ pub mod toque;
 use conversao::{DoTelefone, ParaTelefone};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{BufferSize, FromSample, Sample, SampleFormat, SizedSample, StreamConfig};
+use eco::{Clareza, Limpador, Limpeza, Referencia};
 use motor::midia::{Destino, Fonte, Quadro};
 use rtrb::{Consumer, Producer, RingBuffer};
 use std::sync::Arc;
@@ -170,6 +172,8 @@ pub struct Microfone {
     folga: usize,
     folga_maxima: usize,
     silencio: Arc<AtomicU32>,
+    /// O eco e o ruido (eco.rs); None sem nada a limpar.
+    limpador: Option<Limpador>,
 }
 
 /// Ha quanto tempo o microfone so manda silencio absoluto (zeros): o que um
@@ -189,8 +193,24 @@ impl Microfone {
         Medidor(Arc::clone(&self.silencio))
     }
 
-    /// `id` da lista de `microfones()`; `None` e o padrao do sistema.
+    /// `id` da lista de `microfones()`; `None` e o padrao do sistema. Sem
+    /// limpeza (o teste do microfone mede o que ele capta de verdade).
     pub fn abre(id: Option<&str>) -> Result<Self, ErroSom> {
+        let nada = Limpeza {
+            eco: false,
+            ruido: false,
+            nitida: false,
+        };
+        Self::abre_limpo(id, nada, None)
+    }
+
+    /// O microfone da ligacao: tira o eco com a `referencia` do alto-falante
+    /// da mesma ligacao e o ruido, como a `limpeza` mandar.
+    pub fn abre_limpo(
+        id: Option<&str>,
+        limpeza: Limpeza,
+        referencia: Option<&Referencia>,
+    ) -> Result<Self, ErroSom> {
         let dispositivo = escolhe(id, Sentido::Entrada)?;
         let suportado = dispositivo.default_input_config()?;
         let taxa = suportado.sample_rate();
@@ -217,6 +237,7 @@ impl Microfone {
             folga: amostras_em(taxa, 40),
             folga_maxima: amostras_em(taxa, 120),
             silencio: Arc::default(),
+            limpador: Limpador::novo(taxa, limpeza, referencia.cloned()),
         })
     }
 }
@@ -267,8 +288,13 @@ impl Microfone {
         if tem > precisa + self.folga_maxima {
             // A placa anda mais rapido que o relogio do motor: joga fora o
             // mais velho em vez de deixar o atraso crescer.
-            if let Ok(velho) = self.fila.read_chunk(tem - precisa - self.folga) {
+            let fora = tem - precisa - self.folga;
+            if let Ok(velho) = self.fila.read_chunk(fora) {
                 velho.commit_all();
+                // A referencia do eco perde o mesmo tempo, no mesmo ponto.
+                if let Some(l) = self.limpador.as_mut() {
+                    l.descarta(fora);
+                }
             }
         }
         let tem = self.fila.slots();
@@ -280,6 +306,11 @@ impl Microfone {
         self.enchendo = false;
         self.entrada.resize(precisa, 0.0);
         let lido = self.fila.pop_entire_slice(&mut self.entrada);
+        if lido.is_ok()
+            && let Some(l) = self.limpador.as_mut()
+        {
+            l.processa(&mut self.entrada);
+        }
         if lido.is_err() || self.conversor.converte(&self.entrada, quadro).is_err() {
             debug!("microfone: quadro perdido na conversao");
             quadro.fill(0);
@@ -295,11 +326,23 @@ pub struct AltoFalante {
     conversor: DoTelefone,
     capacidade: usize,
     folga_maxima: usize,
+    /// A voz mais nitida (eco.rs); None desligada.
+    clareza: Option<Clareza>,
 }
 
 impl AltoFalante {
     /// `id` da lista de `alto_falantes()`; `None` e o padrao do sistema.
     pub fn abre(id: Option<&str>) -> Result<Self, ErroSom> {
+        Self::abre_limpo(id, Limpeza::default(), None)
+    }
+
+    /// O alto-falante da ligacao: poe na `referencia` o que tocou (para o
+    /// microfone tirar o eco) e, com `limpeza.nitida`, limpa o que chega.
+    pub fn abre_limpo(
+        id: Option<&str>,
+        limpeza: Limpeza,
+        referencia: Option<&Referencia>,
+    ) -> Result<Self, ErroSom> {
         let dispositivo = escolhe(id, Sentido::Saida)?;
         let suportado = dispositivo.default_output_config()?;
         let taxa = suportado.sample_rate();
@@ -313,11 +356,12 @@ impl AltoFalante {
         for _ in 0..amostras_em(taxa, 40) {
             let _ = fila.push(0.0);
         }
+        let tocou = referencia.map(|r| r.para_o_alto_falante(taxa));
         let fluxo = match formato {
-            SampleFormat::F32 => toca::<f32>(&dispositivo, config, canais, consumidor)?,
-            SampleFormat::I16 => toca::<i16>(&dispositivo, config, canais, consumidor)?,
-            SampleFormat::I32 => toca::<i32>(&dispositivo, config, canais, consumidor)?,
-            SampleFormat::U16 => toca::<u16>(&dispositivo, config, canais, consumidor)?,
+            SampleFormat::F32 => toca::<f32>(&dispositivo, config, canais, consumidor, tocou)?,
+            SampleFormat::I16 => toca::<i16>(&dispositivo, config, canais, consumidor, tocou)?,
+            SampleFormat::I32 => toca::<i32>(&dispositivo, config, canais, consumidor, tocou)?,
+            SampleFormat::U16 => toca::<u16>(&dispositivo, config, canais, consumidor, tocou)?,
             outro => return Err(ErroSom::Formato(outro.to_string())),
         };
         fluxo.play()?;
@@ -328,6 +372,11 @@ impl AltoFalante {
             conversor: DoTelefone::novo(taxa)?,
             capacidade,
             folga_maxima: amostras_em(taxa, 120),
+            clareza: if limpeza.nitida {
+                Clareza::nova(taxa)
+            } else {
+                None
+            },
         })
     }
 }
@@ -337,6 +386,7 @@ fn toca<T>(
     config: StreamConfig,
     canais: usize,
     mut fila: Consumer<f32>,
+    mut tocou: Option<Producer<f32>>,
 ) -> Result<cpal::Stream, ErroSom>
 where
     T: SizedSample + FromSample<f32> + Send + 'static,
@@ -345,8 +395,12 @@ where
         config,
         move |dados: &mut [T], _: &cpal::OutputCallbackInfo| {
             for quadro in dados.chunks_exact_mut(canais) {
-                let amostra = T::from_sample(fila.pop().unwrap_or(0.0));
-                quadro.fill(amostra);
+                let s = fila.pop().unwrap_or(0.0);
+                // A referencia do eco: exatamente o que tocou, ate o silencio.
+                if let Some(r) = tocou.as_mut() {
+                    let _ = r.push(s);
+                }
+                quadro.fill(T::from_sample(s));
             }
         },
         |e| warn!("alto-falante: {e}"),
@@ -365,6 +419,10 @@ impl Destino for AltoFalante {
         }
         match self.conversor.converte(quadro) {
             Ok(amostras) => {
+                let amostras = match self.clareza.as_mut() {
+                    Some(c) => c.processa(amostras),
+                    None => amostras,
+                };
                 let _ = self.fila.push_partial_slice(amostras);
             }
             Err(e) => debug!("alto-falante: {e}"),

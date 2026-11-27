@@ -25,6 +25,7 @@ O núcleo foi testado contra um PBX de verdade (Asterisk 13 com chan_sip), e a j
 | Microfone e alto-falante (cpal: ALSA/PipeWire no Linux, WASAPI no Windows), da placa a 48 kHz para os 8 kHz do telefone | ok no PBX, com headset |
 | Sinal de vida (CRLF a cada 20 s) para o firewall não barrar os avisos do PBX | ok |
 | Excluir do histórico (selecionar vários, com as gravações), nome dado ao ramal, presença em Ramais, aviso de mensagem nova | na janela (o aviso de mensagem só no Linux por ora) |
+| Cancelamento de eco (AEC3 do WebRTC em Rust, o `sonora`), redução de ruído do microfone e voz mais nítida (RNNoise) no que chega | nos testes locais, com eco sintético; falta uma ligação de verdade com caixa de som |
 | Sonda do PBX (OPTIONS a cada 30 s, como o qualify do Asterisk): o tempo de resposta na tela e, sem resposta, a conta sobe de novo sozinha | nos testes locais e na janela, com um PBX falso que cai e volta |
 | Várias contas no mesmo aparelho | na janela: cada conta é um `Ua` com porta própria |
 | Janela: cadastro de conta, discar, atender, mudo, espera, mensagens, últimas chamadas, bandeja, moldura própria | em uso no PBX |

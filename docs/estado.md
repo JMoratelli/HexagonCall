@@ -63,8 +63,15 @@ O que está validado, o que falta e as decisões tomadas. Atualizar ao fim de ca
   novo a cada 30 s. Antes, ele ficava em "Falhou" até alguém clicar em Reconectar.
 - **Windows por último**: tudo se faz e se valida primeiro no Linux; o Windows vem quando o app do Linux estiver
   pronto (ver "Backlog do Windows").
-- **Cancelamento de eco**: precisa de um motor bom (WebRTC AEC3 ou parecido); se ficar bom, ligado por padrão. Junto,
-  a opção de deixar a voz mais nítida (tirar ruído, como o Discord). Pesquisa em andamento.
+- **Cancelamento de eco** (pesquisa de 27/11, com bancada sintética): o AEC3 do WebRTC portado para Rust puro
+  (`sonora` 0.3.0, BSD-3, sem C), no microfone, com a referência do que o alto-falante tocou de verdade (o callback
+  da placa). Na bancada tirou uns 33 dB de eco, como o C++ oficial; com headset fica transparente. **Ligado por
+  padrão**, como a supressão de ruído moderada do mesmo WebRTC no microfone. A **voz mais nítida** (o RNNoise,
+  `nnnoiseless`, Rust puro) limpa o que chega do outro lado, como ele sugeriu; opcional, desligada (pode engolir
+  uma voz fraca). O eco só se tira no envio: só ele tem a referência. Tudo junto custa perto de 1% de um núcleo.
+  Achado que pesou no desenho: o microfone e a referência perdem amostras juntos, no mesmo ponto; um corte só de um
+  lado (a folga do microfone) faz o eco voltar por segundos. Descartados: o `webrtc-audio-processing` (C++), que não
+  compila no MSVC e no Ubuntu 22.04 pede meson novo e baixa o abseil; o Speex, mais fraco; o DeepFilterNet3, +31 MB.
 - **Próximas, nesta ordem**: mockup da tela (aviso de mensagem nova, presença dos ramais, excluir do histórico com
   seleção de vários, editar o nome na lista de Ramais, a linha "Arquivos" do Sobre); transferência com um botão que
   abre as duas opções, escritas por extenso, "Transferência direta" e "Transferência com consulta" (na com consulta,
@@ -91,6 +98,20 @@ Aprovado por ele ("minimalista, bonitinho") e feito no app no mesmo dia:
   toda; uma gravação que outra linha ainda usa não se apaga; um `nomes.toml` que não abre não é gravado por cima; e
   regravar um arquivo mantém a permissão e segue o atalho (ele continua atalho).
 
+### Qualidade da voz (27/11), no app
+
+Ajustes → Áudio → Qualidade da voz: "Cancelar o eco" e "Reduzir o ruído do microfone" ligados, "Voz mais nítida"
+desligada; valem a partir da próxima ligação. Cada ligação cria a referência (`som::eco::Referencia`): o
+alto-falante põe nela o que tocou, o microfone tira o eco com ela (em blocos de 10 ms na taxa da placa, antes de
+converter para 8 kHz), e o microfone trocado no meio da ligação pega a mesma quando o velho a solta. Um erro ou
+pânico no processador desliga a limpeza naquela ligação, e o som segue. A voz mais nítida só funciona com a saída a
+48 kHz (a taxa do RNNoise). Nos testes (`som/src/eco.rs`, sem placa): o eco de uma sala sintética cai mais de 20 dB
+depois de 2 s; sem o outro lado, a voz passa (0,3 dB com o eco; cerca de 1 dB com a supressão, depois de ela
+aprender o fundo em meio segundo); o ruído constante cai mais de 6 dB.
+
+- [ ] Uma ligação de verdade com caixa de som em vez de headset: o outro lado não deve ouvir o próprio eco.
+- [ ] A voz mais nítida numa ligação com ruído do outro lado.
+
 ## Backlog do Windows
 
 Só depois que o app do Linux estiver pronto. **Ao fazer e validar cada item no Windows, retirá-lo desta lista.**
@@ -98,6 +119,8 @@ Só depois que o app do Linux estiver pronto. **Ao fazer e validar cada item no 
 - [ ] Mudo do sistema ("Tirar do mudo" no aviso "Não te ouço"): no Windows não faz nada.
 - [ ] Pausar música e vídeo ao atender: no Windows não faz nada.
 - [ ] Gravação: o "Ouvir" no WebView2 e o "Abrir" da pasta.
+- [ ] Cancelamento de eco, ruído e voz mais nítida numa ligação de verdade (o `sonora` roda os testes no Windows no
+  CI dele, mas aqui nada foi ouvido no Windows).
 - [ ] Aviso de mensagem nova como toast (no Linux é a notificação com "Responder"; no Windows, por ora, só o som e o
   número na aba Conversas: `notificacao.rs`, `mensagem`).
 - [ ] Repetir no Windows o que foi validado no Linux desde 26/11 (atendida em outro ramal, gravação, sonda e

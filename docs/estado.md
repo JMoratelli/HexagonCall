@@ -59,6 +59,9 @@ O que está validado, o que falta e as decisões tomadas. Atualizar ao fim de ca
 
 ### Mais decisões de 27/11
 
+- **Release 1.0.0** (pedido dele em 27/11): sai com o que está pronto e validado no Linux e no Windows, antes da
+  transferência com consulta, da outra ligação no meio de uma e do inglês, que entram nas próximas versões. O
+  AppImageHub continua esperando o inglês.
 - Na busca do teclado, **um clique no achado já liga**.
 - **Estado da conexão claro**: a sonda do PBX (OPTIONS a cada 30 s e, depois de uma sem resposta, de novo em 5 s;
   `motor::Sonda`) diz se o PBX está lá e em quanto tempo responde. Na barra, a conta fica verde só com o nome

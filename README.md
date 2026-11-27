@@ -6,6 +6,16 @@ Softphone SIP para o computador, com ligações e mensagens, em Rust. O **M Call
 Licença: **GNU GPL 3 ou posterior** (`LICENSE`). Toda dependência tem de ter licença compatível, e o CI confere
 (`deny.toml`).
 
+## Instalar
+
+Os pacotes ficam nas [releases](https://github.com/JMoratelli/HexagonCall/releases):
+
+- **Windows** (10 ou mais novo): o instalador `HexagonCallSetup-X.Y.Z.exe`, que não pede administrador;
+- **Linux** (Debian 12, Ubuntu 22.04 ou mais novos): a `HexagonCall-X.Y.Z-x86_64.AppImage`. Marcar como executável e
+  abrir; o atalho no menu o app põe sozinho.
+
+Os dois se atualizam sozinhos pela mesma página, conferindo o sha256 do `SHA256SUMS.txt` da release.
+
 ## O que já faz
 
 O núcleo foi testado contra um PBX de verdade (Asterisk 13 com chan_sip), e a janela existe
@@ -35,8 +45,8 @@ O núcleo foi testado contra um PBX de verdade (Asterisk 13 com chan_sip), e a j
 | Instalador do Windows e atualização sozinha (releases do GitHub, conferida por sha256) | testado no Windows 10 |
 | AppImage do Linux e atualização sozinha (a mesma release, conferida por sha256), atalho no menu | testada no CachyOS (AppImage do Ubuntu 22.04) |
 
-Falta: cancelamento de eco (com caixa de som em vez de headset) e transferência com consulta. A lista viva fica em
-`docs/estado.md`.
+Falta: transferência com consulta, mostrar a outra ligação que chega no meio de uma e a tela em inglês; no Windows, o
+mudo do sistema, a pausa da música e o aviso de mensagem nova. A lista viva fica em `docs/estado.md`.
 
 ## Como está organizado
 

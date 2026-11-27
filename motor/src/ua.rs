@@ -21,7 +21,7 @@ use rsipstack::dialog::dialog::{
 use rsipstack::dialog::dialog_layer::DialogLayer;
 use rsipstack::dialog::invitation::{InviteAsyncResult, InviteOption};
 use rsipstack::dialog::invite_dialog::InviteDialog;
-use rsipstack::dialog::registration::{RefreshOutcome, Registration};
+use rsipstack::dialog::registration::{Registration, backoff_interval, refresh_interval};
 use rsipstack::sip::prelude::*;
 use rsipstack::sip::{
     self as sip, Header, Method, Request, Response, SipMessage, StatusCode, StatusCodeKind, Uri,
@@ -43,6 +43,9 @@ use tracing::{debug, info, warn};
 
 const AGENTE: &str = concat!("Hexagon Call/", env!("CARGO_PKG_VERSION"));
 const EXPIRA_PRESENCA: u32 = 600;
+/// O menor intervalo entre dois registros pedidos pelo offline do PBX: o PBX que
+/// insiste no offline (a sonda dele nao chega aqui) nao vira enxurrada de REGISTER.
+const ENTRE_REGISTROS_FORCADOS: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Registro {
@@ -239,6 +242,9 @@ struct Assinatura {
     call_id: String,
     de_tag: String,
     para_tag: Option<String>,
+    /// A do proprio ramal, que o motor faz sozinho (`assina_propria`): nao vai
+    /// para a tela.
+    propria: bool,
 }
 
 pub struct Ua {
@@ -263,6 +269,8 @@ pub struct Ua {
     assinaturas: Mutex<HashMap<String, Assinatura>>,
     cseq: AtomicU32,
     registrado: AtomicBool,
+    /// O PBX deu o proprio ramal como offline: registrar de novo ja.
+    registra_agora: tokio::sync::Notify,
     /// Call-IDs das ligacoes chegando que outro aparelho atendeu (Inspetor).
     em_outro: Arc<Mutex<HashSet<String>>>,
 }
@@ -462,6 +470,7 @@ impl Ua {
             assinaturas: Mutex::new(HashMap::new()),
             cseq: AtomicU32::new(rand::random::<u32>() % 10_000 + 1),
             registrado: AtomicBool::new(false),
+            registra_agora: tokio::sync::Notify::new(),
             em_outro,
             conta,
         });
@@ -653,13 +662,29 @@ impl Ua {
     /// Assina a presenca de um ramal. O estado chega como Evento::Presenca, a
     /// primeira vez logo depois do 200 e de novo a cada mudanca.
     pub async fn assina_presenca(self: &Arc<Self>, ramal: &str) -> Result<(), Erro> {
-        let (call_id, expira) = self.nova_assinatura(ramal).await?;
-        tokio::spawn(Arc::clone(self).renova_presenca(ramal.to_string(), call_id, expira));
+        let (call_id, expira) = self.nova_assinatura(ramal, false).await?;
+        tokio::spawn(Arc::clone(self).renova_presenca(ramal.to_string(), call_id, expira, false));
         Ok(())
     }
 
+    /// A presenca do proprio ramal, assinada depois do primeiro registro. O
+    /// chan_sip guarda um contato por ramal: outro aparelho do mesmo ramal que
+    /// sai (Expires 0) apaga o registro deste, e o PBX passa a dar o ramal como
+    /// offline (480 para quem liga) enquanto a conta se acha registrada. Visto
+    /// num PC com Windows em 27/11/2026: fechar e abrir o app resolveu. Com o
+    /// offline daqui, a conta registra de novo na hora, sem esperar a renovacao
+    /// (75% do prazo: 7,5 min com os 600 s de sempre). PBX sem hint para o ramal
+    /// recusa o SUBSCRIBE, e fica so a renovacao.
+    async fn assina_propria(self: Arc<Self>) {
+        let ramal = self.conta.usuario.clone();
+        match self.nova_assinatura(&ramal, true).await {
+            Ok((call_id, expira)) => self.renova_presenca(ramal, call_id, expira, true).await,
+            Err(e) => debug!("sem a presenca do proprio ramal: {e}"),
+        }
+    }
+
     /// O SUBSCRIBE inicial. Devolve o Call-ID da assinatura e o prazo dado.
-    async fn nova_assinatura(&self, ramal: &str) -> Result<(String, u32), Erro> {
+    async fn nova_assinatura(&self, ramal: &str, propria: bool) -> Result<(String, u32), Erro> {
         let uri = self.uri(ramal)?;
         let call_id = format!("{:016x}@{}", rand::random::<u64>(), self.ip);
         let de_tag = make_tag().value().to_string();
@@ -672,6 +697,7 @@ impl Ua {
                 call_id: call_id.clone(),
                 de_tag: de_tag.clone(),
                 para_tag: None,
+                propria,
             },
         );
         let resp = match self
@@ -724,7 +750,13 @@ impl Ua {
 
     /// Renova a assinatura a 75% do prazo. Se o PBX esqueceu dela (481, como
     /// depois de um NOTIFY sem resposta), assina de novo do zero.
-    async fn renova_presenca(self: Arc<Self>, ramal: String, mut call_id: String, expira: u32) {
+    async fn renova_presenca(
+        self: Arc<Self>,
+        ramal: String,
+        mut call_id: String,
+        expira: u32,
+        propria: bool,
+    ) {
         let tres_quartos = |s: u32| Duration::from_secs(u64::from(s) * 3 / 4);
         let mut espera = tres_quartos(expira);
         loop {
@@ -749,14 +781,16 @@ impl Ua {
                 resultado => {
                     debug!(%ramal, ?resultado, "renovacao da presenca falhou; assinando de novo");
                     trava(&self.assinaturas).remove(&call_id);
-                    match self.nova_assinatura(&ramal).await {
+                    match self.nova_assinatura(&ramal, propria).await {
                         Ok((novo, prazo)) => {
                             call_id = novo;
                             espera = tres_quartos(prazo);
                         }
                         Err(e) => {
                             warn!(%ramal, "nao consegui assinar a presenca de novo: {e}");
-                            self.avisa(Evento::PresencaEncerrada { ramal });
+                            if !propria {
+                                self.avisa(Evento::PresencaEncerrada { ramal });
+                            }
                             return;
                         }
                     }
@@ -765,45 +799,59 @@ impl Ua {
         }
     }
 
+    /// Cancela a assinatura que a tela pediu para o ramal (a do proprio ramal,
+    /// do motor, segue).
     pub async fn cancela_presenca(&self, ramal: &str) -> Result<(), Erro> {
         let assinatura = {
             let mut lista = trava(&self.assinaturas);
             let chave = lista
                 .iter()
-                .find(|(_, a)| a.ramal == ramal)
+                .find(|(_, a)| a.ramal == ramal && !a.propria)
                 .map(|(k, _)| k.clone());
             chave.and_then(|k| lista.remove(&k))
         };
-        if let Some(a) = assinatura {
-            let resp = self
-                .subscribe(a.uri, &a.call_id, &a.de_tag, a.para_tag, 0)
-                .await?;
-            return ok_ou_erro(&resp);
+        match assinatura {
+            Some(a) => self.encerra_assinatura(a).await,
+            None => Ok(()),
         }
-        Ok(())
+    }
+
+    /// O SUBSCRIBE com Expires 0 de uma assinatura ja tirada do mapa.
+    async fn encerra_assinatura(&self, a: Assinatura) -> Result<(), Erro> {
+        let resp = self
+            .subscribe(a.uri, &a.call_id, &a.de_tag, a.para_tag, 0)
+            .await?;
+        ok_ou_erro(&resp)
     }
 
     async fn recebe_notify(&self, mut tx: Transaction) -> Result<(), Erro> {
         let call_id = tx.original.call_id_header()?.value().to_string();
-        let ramal = trava(&self.assinaturas)
+        let achada = trava(&self.assinaturas)
             .get(&call_id)
-            .map(|a| a.ramal.clone());
-        let Some(ramal) = ramal else {
+            .map(|a| (a.ramal.clone(), a.propria));
+        let Some((ramal, propria)) = achada else {
             tx.reply(StatusCode::CallTransactionDoesNotExist).await?;
             return Ok(());
         };
         tx.reply(StatusCode::OK).await?;
         if !tx.original.body.is_empty() {
             let presenca = presenca::de_pidf(&String::from_utf8_lossy(&tx.original.body));
-            self.avisa(Evento::Presenca {
-                ramal: ramal.clone(),
-                presenca,
-            });
+            if !propria {
+                self.avisa(Evento::Presenca {
+                    ramal: ramal.clone(),
+                    presenca,
+                });
+            } else if presenca == Presenca::Offline && self.registrado.load(Ordering::Relaxed) {
+                info!(%ramal, "o PBX deu o ramal como offline: registrando de novo");
+                self.registra_agora.notify_one();
+            }
         }
         let estado = valor_de(&tx.original.headers, "Subscription-State").unwrap_or_default();
         if estado.to_ascii_lowercase().starts_with("terminated") {
             trava(&self.assinaturas).remove(&call_id);
-            self.avisa(Evento::PresencaEncerrada { ramal });
+            if !propria {
+                self.avisa(Evento::PresencaEncerrada { ramal });
+            }
         }
         Ok(())
     }
@@ -1568,37 +1616,67 @@ impl Ua {
                 return;
             }
         };
+        // O laco do `Registration::keep_alive` do rsipstack (renova a 75% do
+        // prazo; depois de falha, de novo em 1, 2, 4... ate 60 s), com uma porta
+        // a mais: o offline do proprio ramal (`assina_propria`) adianta a vez.
         let mut registro = Registration::new(self.endpoint.clone(), Some(self.credencial.clone()));
-        let ua = Arc::clone(&self);
-        registro
-            .keep_alive(
-                servidor.clone(),
-                self.conta.expira_s,
-                self.cancela_registro.clone(),
-                |resultado| {
-                    let evento = match resultado {
-                        RefreshOutcome::Registered(resp) => {
-                            ua.registrado.store(true, Ordering::Relaxed);
-                            let expira = valor_de(&resp.headers, "Expires")
-                                .and_then(|v| v.parse().ok())
-                                .unwrap_or(ua.conta.expira_s);
-                            Registro::Registrado { expira }
+        let mut falhas: u32 = 0;
+        let mut forcado: Option<Instant> = None;
+        let mut assinou = false;
+        loop {
+            let evento = match registro
+                .register(servidor.clone(), Some(self.conta.expira_s))
+                .await
+            {
+                Ok(resp) if resp.status_code.kind() == StatusCodeKind::Successful => {
+                    falhas = 0;
+                    self.registrado.store(true, Ordering::Relaxed);
+                    let expira = valor_de(&resp.headers, "Expires")
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(self.conta.expira_s);
+                    Registro::Registrado { expira }
+                }
+                Ok(resp) => {
+                    falhas = falhas.saturating_add(1);
+                    Registro::Falhou {
+                        codigo: Some(codigo(&resp)),
+                        motivo: resp.status_code.text().to_string(),
+                    }
+                }
+                Err(e) => {
+                    falhas = falhas.saturating_add(1);
+                    Registro::Falhou {
+                        codigo: None,
+                        motivo: e.to_string(),
+                    }
+                }
+            };
+            self.avisa(Evento::Registro(evento));
+            if falhas == 0 && !assinou {
+                assinou = true;
+                tokio::spawn(Arc::clone(&self).assina_propria());
+            }
+            let espera = if falhas == 0 {
+                let prazo = registro.granted_expires.filter(|g| *g > 0);
+                refresh_interval(prazo.unwrap_or(self.conta.expira_s))
+            } else {
+                backoff_interval(falhas.saturating_sub(1))
+            };
+            tokio::select! {
+                () = self.cancela_registro.cancelled() => break,
+                () = tokio::time::sleep(espera) => {}
+                () = self.registra_agora.notified() => {
+                    if let Some(antes) = forcado {
+                        let falta = ENTRE_REGISTROS_FORCADOS.saturating_sub(antes.elapsed());
+                        tokio::select! {
+                            () = self.cancela_registro.cancelled() => break,
+                            () = tokio::time::sleep(falta) => {}
                         }
-                        RefreshOutcome::Rejected(resp) => Registro::Falhou {
-                            codigo: Some(codigo(resp)),
-                            motivo: resp.status_code.text().to_string(),
-                        },
-                        RefreshOutcome::Failed(e) => Registro::Falhou {
-                            codigo: None,
-                            motivo: e.to_string(),
-                        },
-                        #[allow(unreachable_patterns)]
-                        _ => return,
-                    };
-                    ua.avisa(Evento::Registro(evento));
-                },
-            )
-            .await;
+                    }
+                    forcado = Some(Instant::now());
+                }
+            }
+        }
         if self.registrado.swap(false, Ordering::Relaxed) {
             match registro.register(servidor, Some(0)).await {
                 Ok(_) => self.avisa(Evento::Registro(Registro::Desregistrado)),
@@ -1616,12 +1694,13 @@ impl Ua {
                 debug!(%id, "ao encerrar: {e}");
             }
         }
-        let ramais: Vec<String> = trava(&self.assinaturas)
-            .values()
-            .map(|a| a.ramal.clone())
-            .collect();
-        for ramal in ramais {
-            if let Err(e) = self.cancela_presenca(&ramal).await {
+        // Todas, a do proprio ramal tambem (antes do desregistro: o offline que
+        // ele causa nao chega a pedir registro de novo).
+        let assinaturas: Vec<Assinatura> =
+            trava(&self.assinaturas).drain().map(|(_, a)| a).collect();
+        for a in assinaturas {
+            let ramal = a.ramal.clone();
+            if let Err(e) = self.encerra_assinatura(a).await {
                 debug!(%ramal, "ao cancelar a presenca: {e}");
             }
         }

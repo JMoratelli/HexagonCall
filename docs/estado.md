@@ -56,6 +56,17 @@ O que está validado, o que falta e as decisões tomadas. Atualizar ao fim de ca
   (`edge://settings/autofill/passwords`, ERR_INVALID_URL). Não sai com `autocomplete="off"`, com
   `generalAutofillEnabled: false` nem desligando as features do Edge; o `ContextMenuRequested` do WebView2, que tiraria
   só o item, pede `unsafe`. Copiar e colar seguem pelo teclado (Ctrl+C, Ctrl+V).
+- **O offline do próprio ramal faz registrar de novo** (visto num PC com Windows e a 1.0.0, em 27/11): o chan_sip guarda
+  um contato por ramal, e outro aparelho do mesmo ramal que sai manda Expires 0, que apaga o registro do ramal inteiro.
+  O PBX passava a dar o ramal como offline (480 "Temporarily Unavailable" para quem liga, ligações de saída
+  funcionando) com o app verde, que só renovaria aos 450 s; fechar e abrir resolvia. Agora o motor assina a presença
+  do próprio ramal depois do primeiro registro (`Ua::assina_propria`, fora da tela) e, quando o PBX a dá como offline
+  com a conta registrada, registra de novo na hora (no máximo uma vez a cada 30 s; a renovação a 75% do prazo
+  segue). O laço do registro passou a ser nosso: o `keep_alive` do rsipstack não acorda antes da hora. PBX sem hint
+  para o ramal recusa o SUBSCRIBE, e fica só a renovação. Na bancada, contra o PBX (27/11, na VM com Windows): a A
+  registrada; a B entra no mesmo ramal e sai com Expires 0; o PBX manda o offline e a A registra de novo no mesmo
+  segundo; a C liga para o ramal e a A atende, com áudio nos dois sentidos e nenhum pacote perdido. No fim, a A sai
+  com um desregistro só. No motor, `o_pbx_da_o_ramal_como_offline_e_a_conta_registra_de_novo`.
 
 ### Mais decisões de 27/11
 

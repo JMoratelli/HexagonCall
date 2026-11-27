@@ -654,3 +654,127 @@ async fn abandonar_nao_desregistra() {
     .await;
     assert!(!matches!(depois, Ok(true)), "abandonar mandou desregistro");
 }
+
+// ---- O PBX que esquece o registro ----
+
+/// O valor de um cabecalho numa mensagem SIP crua.
+fn cabecalho<'a>(msg: &'a str, nome: &str) -> &'a str {
+    msg.lines()
+        .find_map(|l| {
+            let (n, v) = l.split_once(':')?;
+            n.trim().eq_ignore_ascii_case(nome).then(|| v.trim())
+        })
+        .unwrap_or("")
+}
+
+/// O proximo pedido `metodo` que chega ao PBX de mentira (o resto, como o CRLF
+/// do sinal de vida e as respostas, fica para tras).
+async fn pedido(pbx: &tokio::net::UdpSocket, metodo: &str) -> (String, SocketAddr) {
+    tokio::time::timeout(ESPERA, async {
+        let mut buf = vec![0u8; 8192];
+        loop {
+            let (n, de) = pbx.recv_from(&mut buf).await.unwrap();
+            let msg = String::from_utf8_lossy(buf.get(..n).unwrap()).into_owned();
+            if msg.starts_with(&format!("{metodo} ")) {
+                return (msg, de);
+            }
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("o {metodo} nao chegou"))
+}
+
+/// O 200 de um pedido cru, com tag no To e os cabecalhos a mais.
+fn ok_para(pedido: &str, extra: &str) -> String {
+    let para = cabecalho(pedido, "To");
+    let para = if para.contains("tag=") {
+        para.to_string()
+    } else {
+        format!("{para};tag=pbx")
+    };
+    format!(
+        "SIP/2.0 200 OK\r\nVia: {}\r\nFrom: {}\r\nTo: {para}\r\nCall-ID: {}\r\nCSeq: {}\r\n\
+         {extra}Content-Length: 0\r\n\r\n",
+        cabecalho(pedido, "Via"),
+        cabecalho(pedido, "From"),
+        cabecalho(pedido, "Call-ID"),
+        cabecalho(pedido, "CSeq"),
+    )
+}
+
+/// Um NOTIFY de presenca do ramal 1001, na assinatura que o SUBSCRIBE abriu,
+/// com o PIDF do chan_sip (`basic` e `note`).
+fn notify(subscribe: &str, pbx: SocketAddr, cseq: u32, basic: &str, nota: &str) -> String {
+    let de = cabecalho(subscribe, "From");
+    let tag = de.split("tag=").nth(1).unwrap().split(';').next().unwrap();
+    let corpo = format!(
+        "<?xml version=\"1.0\" encoding=\"ISO-8859-1\"?>\n\
+         <presence xmlns=\"urn:ietf:params:xml:ns:pidf\" entity=\"sip:1001@127.0.0.1\">\n\
+         <note>{nota}</note>\n<tuple id=\"1001\"><status><basic>{basic}</basic></status></tuple>\n\
+         </presence>\n"
+    );
+    format!(
+        "NOTIFY sip:1001@127.0.0.1 SIP/2.0\r\nVia: SIP/2.0/UDP {pbx};branch=z9hG4bK-presenca{cseq}\r\n\
+         Max-Forwards: 70\r\nFrom: <sip:1001@127.0.0.1>;tag=pbx\r\nTo: <sip:1001@127.0.0.1>;tag={tag}\r\n\
+         Call-ID: {}\r\nCSeq: {cseq} NOTIFY\r\nContact: <sip:1001@{pbx}>\r\nEvent: presence\r\n\
+         Subscription-State: active;expires=600\r\nContent-Type: application/pidf+xml\r\n\
+         Content-Length: {}\r\n\r\n{corpo}",
+        cabecalho(subscribe, "Call-ID"),
+        corpo.len()
+    )
+}
+
+#[tokio::test]
+async fn o_pbx_da_o_ramal_como_offline_e_a_conta_registra_de_novo() {
+    // O chan_sip guarda um contato por ramal: outro aparelho do mesmo ramal que
+    // sai (Expires 0) apaga o registro deste, e o PBX da o ramal como offline
+    // (480 para quem liga) com a conta achando que esta registrada. A conta
+    // assina a propria presenca e, no offline, registra de novo sem esperar os
+    // 450 s da renovacao.
+    let pbx = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let do_pbx = pbx.local_addr().unwrap();
+    let mut conta = Conta::nova("1001", "127.0.0.1");
+    conta.porta = do_pbx.port();
+    let opcoes = Opcoes {
+        porta_sip: 0,
+        registrar: true,
+        sonda: None,
+    };
+    let (_ua, mut r) = Ua::inicia(conta, "senha".into(), opcoes).await.unwrap();
+
+    let (registro, de) = pedido(&pbx, "REGISTER").await;
+    let resposta = ok_para(&registro, "Expires: 600\r\n");
+    pbx.send_to(resposta.as_bytes(), de).await.unwrap();
+    espera(&mut r, |e| {
+        matches!(e, Evento::Registro(Registro::Registrado { expira: 600 }))
+    })
+    .await;
+
+    let (subscribe, de) = pedido(&pbx, "SUBSCRIBE").await;
+    assert!(subscribe.starts_with("SUBSCRIBE sip:1001@"), "{subscribe}");
+    assert_eq!(cabecalho(&subscribe, "Event"), "presence");
+    let resposta = ok_para(&subscribe, "Expires: 600\r\n");
+    pbx.send_to(resposta.as_bytes(), de).await.unwrap();
+
+    // Livre: nada a fazer.
+    let livre = notify(&subscribe, do_pbx, 2, "open", "Ready");
+    pbx.send_to(livre.as_bytes(), de).await.unwrap();
+    let cedo = tokio::time::timeout(Duration::from_millis(800), pedido(&pbx, "REGISTER")).await;
+    assert!(cedo.is_err(), "registrou de novo com o ramal livre");
+
+    // Offline: registra de novo, na mesma Call-ID, com o CSeq seguinte (nao e
+    // retransmissao).
+    let offline = notify(&subscribe, do_pbx, 3, "closed", "Not online");
+    pbx.send_to(offline.as_bytes(), de).await.unwrap();
+    let (de_novo, _) = pedido(&pbx, "REGISTER").await;
+    assert_eq!(
+        cabecalho(&de_novo, "Call-ID"),
+        cabecalho(&registro, "Call-ID")
+    );
+    assert_ne!(cabecalho(&de_novo, "CSeq"), cabecalho(&registro, "CSeq"));
+
+    // A presenca do proprio ramal nao vai para a tela.
+    while let Ok(e) = r.try_recv() {
+        assert!(!matches!(e, Evento::Presenca { .. }), "{e:?}");
+    }
+}

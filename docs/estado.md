@@ -251,7 +251,9 @@ aberto:
 - [ ] O som da tela (teclas, chamando) tocando de dentro da AppImage, e uma ligação de verdade por ela.
 - [x] A AppImage do CI: o job `linux` do Pacote (run à mão em 26/11) gerou a AppImage, o `.zsync` com o nome final e o
   `SHA256SUMS.txt`, que conferem, com a informação de atualização embutida.
-- [ ] Uma release de verdade no GitHub (tag `vX.Y.Z`), com os pacotes dos dois sistemas.
+- [x] Uma release de verdade no GitHub: a **1.0.0** (tag `v1.0.0`, 27/11), publicada pelo Pacote com o instalador, o
+  `HexagonCall.exe`, a AppImage, o `.zsync` e um `SHA256SUMS.txt` só, que confere baixado da release; a AppImage leva
+  a informação de atualização do GitHub.
 
 ## Validado em 27/11/2026 (testes locais e a janela num KWin virtual)
 

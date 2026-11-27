@@ -7,19 +7,22 @@
 //! ligacao, ela e recusada (486) e entra no historico como perdida.
 
 use crate::gravacao::Gravacoes;
-use crate::guarda::{Guarda, ItemConversa, ItemHistorico, OndeASenha, Preferencias, agora};
+use crate::guarda::{
+    ChaveHistorico, Guarda, ItemConversa, ItemHistorico, OndeASenha, Preferencias, agora,
+};
 use crate::musica::Musica;
 use crate::notificacao::Notificacoes;
 use motor::midia::{Destino, Fonte, Silencio};
 use motor::{Evento, Opcoes, Registro, Ua};
 use nucleo::conta::Conta;
+use nucleo::presenca::Presenca;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant, SystemTime};
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::mpsc::UnboundedReceiver;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 /// O que vai (microfone) e o que volta (alto-falante) numa ligacao, o
 /// medidor de silencio do microfone e o que nao abriu. Sem microfone ou sem
@@ -58,6 +61,34 @@ pub struct Telefone {
     musica: Musica,
     /// A pasta das gravacoes; None num sistema sem pasta de dados.
     gravacoes: Option<Gravacoes>,
+    /// O ultimo estado de cada ramal assinado (Ramais), para a tela reaberta.
+    presencas: Mutex<HashMap<String, Presenca>>,
+}
+
+/// Quantos ramais a conta principal assina, no maximo.
+const RAMAIS_ASSINADOS: usize = 50;
+
+/// O jeito curto da presenca, para a tela.
+fn presenca_da_tela(p: Presenca) -> &'static str {
+    match p {
+        Presenca::Livre => "livre",
+        Presenca::EmLigacao => "ocupado",
+        Presenca::Chamando => "tocando",
+        Presenca::Offline => "offline",
+        Presenca::Desconhecida => "desconhecida",
+    }
+}
+
+/// So digitos, ate 6: um ramal. Numero de fora nao tem presenca no PBX.
+fn e_ramal(r: &str) -> bool {
+    !r.is_empty() && r.len() <= 6 && r.chars().all(|c| c.is_ascii_digit())
+}
+
+/// O que a exclusao do historico tirou.
+#[derive(Debug, Clone, Serialize)]
+pub struct Exclusao {
+    pub ligacoes: usize,
+    pub gravacoes: usize,
 }
 
 struct Linha {
@@ -76,6 +107,8 @@ struct Linha {
     /// Desde quando o PBX nao responde (sonda ou registro sem resposta); some
     /// quando a conta registra de novo.
     fora_desde: Option<u64>,
+    /// Ramais com presenca assinada pelo `Ua` de agora.
+    assinadas: HashSet<String>,
 }
 
 /// Sondas seguidas sem resposta (uns 10 s, com a reconferencia de 5 s) para a
@@ -175,6 +208,10 @@ pub struct Estado {
     pub tem_chaveiro: bool,
     pub pasta: String,
     pub toques: Vec<ToqueVista>,
+    /// Os nomes dados aos ramais aqui (Ramais, o lapis).
+    pub apelidos: std::collections::BTreeMap<String, String>,
+    /// Ramal -> livre, ocupado, tocando, offline, desconhecida.
+    pub presencas: HashMap<String, &'static str>,
 }
 
 /// O que chega na tela.
@@ -234,6 +271,14 @@ pub enum Aviso {
     Mensagem {
         item: ItemConversa,
     },
+    Presenca {
+        ramal: String,
+        estado: &'static str,
+    },
+    /// "Responder" no aviso da mensagem: a tela abre a conversa.
+    AbreConversa {
+        ramal: String,
+    },
     /// O microfone ou o alto-falante nao abriu: a ligacao segue em silencio
     /// daquele lado. `None` nos dois e "voltou" (trocou o microfone).
     SemAudio {
@@ -284,11 +329,131 @@ impl Telefone {
             testando: std::sync::atomic::AtomicBool::new(false),
             musica: Musica::default(),
             gravacoes: Gravacoes::abre().map_err(|e| warn!("gravacoes: {e}")).ok(),
+            presencas: Mutex::new(HashMap::new()),
         })
     }
 
     pub fn guarda(&self) -> &Guarda {
         &self.guarda
+    }
+
+    /// Exclui ligacoes do historico (a tela confirmou) e, se pedido, as
+    /// gravacoes delas.
+    pub fn exclui_historico(
+        &self,
+        chaves: &[ChaveHistorico],
+        com_gravacoes: bool,
+    ) -> Result<Exclusao, String> {
+        let sairam = self.guarda.exclui_historico(chaves)?;
+        let mut gravacoes = 0;
+        if com_gravacoes && let Some(g) = self.gravacoes.as_ref() {
+            let soltas = sairam
+                .itens
+                .iter()
+                .filter_map(|i| i.gravacao.as_deref())
+                .filter(|a| !sairam.gravacoes_em_uso.contains(*a));
+            for a in soltas {
+                match g.apaga(a) {
+                    Ok(()) => gravacoes += 1,
+                    Err(e) => warn!("excluir a gravacao: {e}"),
+                }
+            }
+        }
+        info!(
+            ligacoes = sairam.itens.len(),
+            gravacoes, "historico excluido"
+        );
+        Ok(Exclusao {
+            ligacoes: sairam.itens.len(),
+            gravacoes,
+        })
+    }
+
+    /// Da (ou tira) o nome de um ramal; devolve todos.
+    pub fn grava_nome(
+        &self,
+        ramal: &str,
+        nome: &str,
+    ) -> Result<std::collections::BTreeMap<String, String>, String> {
+        self.guarda.grava_nome(ramal, nome)
+    }
+
+    /// Assina a presenca dos ramais conhecidos (historico e conversas, os mais
+    /// recentes primeiro) pela conta principal, cada um uma vez por `Ua`.
+    async fn assina_presencas(self: Arc<Self>, conta: String, novos: Option<Vec<String>>) {
+        let (ua, meus, ja) = {
+            let linhas = trava(&self.linhas);
+            let principal = linhas
+                .iter()
+                .find(|l| l.conta.principal && l.registro == EstadoRegistro::Registrado)
+                .or_else(|| {
+                    linhas
+                        .iter()
+                        .find(|l| l.registro == EstadoRegistro::Registrado)
+                });
+            let Some(p) = principal.filter(|p| p.conta.id() == conta) else {
+                return;
+            };
+            let meus: HashSet<String> = linhas.iter().map(|l| l.conta.usuario.clone()).collect();
+            (p.ua.clone(), meus, p.assinadas.clone())
+        };
+        let Some(ua) = ua else { return };
+        let candidatos = novos.unwrap_or_else(|| {
+            let mut quem: Vec<(u64, String)> = self
+                .guarda
+                .historico()
+                .into_iter()
+                .map(|h| (h.quando, h.ramal))
+                .chain(
+                    self.guarda
+                        .conversas()
+                        .into_iter()
+                        .map(|c| (c.quando, c.ramal)),
+                )
+                .collect();
+            quem.sort_by_key(|q| std::cmp::Reverse(q.0));
+            quem.into_iter().map(|(_, r)| r).collect()
+        });
+        let mut vistos = HashSet::new();
+        let ramais: Vec<String> = candidatos
+            .into_iter()
+            .filter(|r| e_ramal(r) && !meus.contains(r) && vistos.insert(r.clone()))
+            .take(RAMAIS_ASSINADOS)
+            .filter(|r| !ja.contains(r))
+            .collect();
+        for ramal in ramais {
+            if let Some(l) = trava(&self.linhas)
+                .iter_mut()
+                .find(|l| l.conta.id() == conta)
+            {
+                l.assinadas.insert(ramal.clone());
+            }
+            if let Err(e) = ua.assina_presenca(&ramal).await {
+                debug!(%ramal, "presenca: {e}");
+            }
+        }
+    }
+
+    /// Um ramal novo (ligou ou mandou mensagem): assina a presenca dele.
+    fn assina_novo(self: &Arc<Self>, conta: &str, ramal: &str) {
+        let tel = Arc::clone(self);
+        let (conta, ramal) = (conta.to_string(), ramal.to_string());
+        tauri::async_runtime::spawn(tel.assina_presencas(conta, Some(vec![ramal])));
+    }
+
+    /// "Responder" no aviso da mensagem: a tela abre a conversa.
+    pub fn abre_conversa(&self, ramal: &str) {
+        self.avisa(Aviso::AbreConversa {
+            ramal: ramal.to_string(),
+        });
+    }
+
+    /// A janela esta na frente de quem usa: a mensagem nova nao precisa do
+    /// aviso do sistema.
+    fn janela_na_frente(&self) -> bool {
+        self.app
+            .get_webview_window("principal")
+            .is_some_and(|w| w.is_visible().unwrap_or(false) && w.is_focused().unwrap_or(false))
     }
 
     pub fn gravacoes(&self) -> Result<&Gravacoes, String> {
@@ -369,6 +534,7 @@ impl Telefone {
                 pbx: None,
                 sem_resposta: 0,
                 fora_desde: None,
+                assinadas: HashSet::new(),
             })
             .collect();
         self.avisa_contas();
@@ -456,6 +622,11 @@ impl Telefone {
             historico: self.historico(),
             conversas: self.guarda.conversas(),
             preferencias: self.guarda.preferencias(),
+            apelidos: self.guarda.nomes(),
+            presencas: trava(&self.presencas)
+                .iter()
+                .map(|(r, p)| (r.clone(), presenca_da_tela(*p)))
+                .collect(),
             tem_chaveiro: Guarda::tem_chaveiro(),
             pasta: self.guarda.pasta().display().to_string(),
             toques: som::toque::toques()
@@ -511,6 +682,7 @@ impl Telefone {
             Ok((ua, eventos)) => {
                 if let Some(l) = trava(&self.linhas).iter_mut().find(|l| l.conta.id() == id) {
                     l.ua = Some(Arc::clone(&ua));
+                    l.assinadas.clear();
                 }
                 let estado = if registra {
                     EstadoRegistro::Iniciando
@@ -677,6 +849,9 @@ impl Telefone {
             match e {
                 Evento::Registro(Registro::Registrado { .. }) => {
                     self.marca_linha(&conta, EstadoRegistro::Registrado, None);
+                    // A cada registro (e renovacao): so assina quem falta.
+                    let tel = Arc::clone(&self);
+                    tauri::async_runtime::spawn(tel.assina_presencas(conta.clone(), None));
                 }
                 Evento::Registro(Registro::Falhou { codigo, motivo }) => {
                     // 408: o REGISTER ficou sem resposta (o rsipstack responde
@@ -705,6 +880,20 @@ impl Telefone {
                     if let Err(e) = self.guarda.acrescenta_conversa(&item) {
                         warn!("conversa: {e}");
                     }
+                    if !self.janela_na_frente() {
+                        let quem = self
+                            .guarda
+                            .nomes()
+                            .remove(&item.ramal)
+                            .or_else(|| item.nome.clone());
+                        self.notificacoes.mensagem(
+                            &self.app,
+                            &item.ramal,
+                            quem.as_deref(),
+                            &item.texto,
+                        );
+                    }
+                    self.assina_novo(&conta, &item.ramal);
                     self.avisa(Aviso::Mensagem { item });
                 }
                 Evento::Recebendo { id, de, nome } => self.chegando(&conta, id, de, nome).await,
@@ -769,6 +958,7 @@ impl Telefone {
                     if let Err(e) = self.guarda.acrescenta_historico(&item) {
                         warn!("historico: {e}");
                     }
+                    self.assina_novo(&conta, &item.ramal);
                     self.avisa(Aviso::Encerrada { id, item });
                 }
                 Evento::TransferenciaFalhou { codigo, .. } => {
@@ -777,7 +967,27 @@ impl Telefone {
                     ));
                 }
                 Evento::Pbx { resposta } => self.resposta_do_pbx(&conta, resposta),
-                Evento::Presenca { .. } | Evento::PresencaEncerrada { .. } => {}
+                Evento::Presenca { ramal, presenca } => {
+                    trava(&self.presencas).insert(ramal.clone(), presenca);
+                    self.avisa(Aviso::Presenca {
+                        ramal,
+                        estado: presenca_da_tela(presenca),
+                    });
+                }
+                Evento::PresencaEncerrada { ramal } => {
+                    // O PBX encerrou: na proxima renovacao do registro, assina de novo.
+                    if let Some(l) = trava(&self.linhas)
+                        .iter_mut()
+                        .find(|l| l.conta.id() == conta)
+                    {
+                        l.assinadas.remove(&ramal);
+                    }
+                    trava(&self.presencas).insert(ramal.clone(), Presenca::Desconhecida);
+                    self.avisa(Aviso::Presenca {
+                        ramal,
+                        estado: presenca_da_tela(Presenca::Desconhecida),
+                    });
+                }
             }
         }
     }
@@ -1218,6 +1428,7 @@ impl Telefone {
             pbx: None,
             sem_resposta: 0,
             fora_desde: None,
+            assinadas: HashSet::new(),
         };
         let ua_antigo = {
             let mut linhas = trava(&self.linhas);

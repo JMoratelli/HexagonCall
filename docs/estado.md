@@ -72,6 +72,25 @@ O que está validado, o que falta e as decisões tomadas. Atualizar ao fim de ca
   base de duas ligações ao mesmo tempo da transferência com consulta; e a interface em inglês, escolhida pelo idioma
   do sistema (português em `pt*`).
 
+### O mockup aprovado (27/11), no app
+
+Aprovado por ele ("minimalista, bonitinho") e feito no app no mesmo dia:
+
+- **Excluir do histórico**: a lixeira no cabeçalho de Últimas chamadas entra no modo de seleção (toque nas ligações
+  ou "Marcar todas"); "Excluir" pede confirmação, com "Apagar também as gravações delas" marcada. Sai do
+  `historico.txt` inteiro (não só das 500 linhas que a tela carrega), pelo começo da ligação, a conta e o ramal.
+- **Ramais**: a presença (bolinha no avatar e "Livre", "Em ligação", "Tocando", "Offline"), pela assinatura de
+  presença da conta principal aos ramais conhecidos (até 50, os mais recentes; número de fora não), e o **nome dado
+  aqui** (o lápis; Enter salva, Esc cancela), em `nomes.toml`, que vale mais que o nome que vem do PBX.
+- **Mensagem nova** com a janela escondida ou atrás de outra: a notificação do sistema com quem mandou e o texto;
+  "Responder" abre a conversa.
+- **Sobre**: os caminhos (Arquivos e Gravações) embaixo, em linha inteira.
+- Revisão adversarial da exclusão (27/11), corrigido: a caixa "apagar também as gravações" desmarcada voltava
+  marcada num redesenho (uma ligação que acabasse no meio); a ligação era achada só pela hora, a conta e o ramal, e
+  pegava duas do mesmo segundo (os dois ligando ao mesmo tempo: a feita, gravada, e a recusada) — agora é a linha
+  toda; uma gravação que outra linha ainda usa não se apaga; um `nomes.toml` que não abre não é gravado por cima; e
+  regravar um arquivo mantém a permissão e segue o atalho (ele continua atalho).
+
 ## Backlog do Windows
 
 Só depois que o app do Linux estiver pronto. **Ao fazer e validar cada item no Windows, retirá-lo desta lista.**
@@ -79,6 +98,8 @@ Só depois que o app do Linux estiver pronto. **Ao fazer e validar cada item no 
 - [ ] Mudo do sistema ("Tirar do mudo" no aviso "Não te ouço"): no Windows não faz nada.
 - [ ] Pausar música e vídeo ao atender: no Windows não faz nada.
 - [ ] Gravação: o "Ouvir" no WebView2 e o "Abrir" da pasta.
+- [ ] Aviso de mensagem nova como toast (no Linux é a notificação com "Responder"; no Windows, por ora, só o som e o
+  número na aba Conversas: `notificacao.rs`, `mensagem`).
 - [ ] Repetir no Windows o que foi validado no Linux desde 26/11 (atendida em outro ramal, gravação, sonda e
   reconexão, menu e atalhos do navegador desligados).
 

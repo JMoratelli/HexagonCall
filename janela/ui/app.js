@@ -69,6 +69,7 @@ const state = {
   open: null, cq: '', drafts: {}, naoLidas: {},
   form: null, remover: null, devices: null, devErro: null, autostart: null,
   grav: null, retencao: null, ouvindo: null,
+  sel: null, apelidos: {}, presencas: {}, editaNome: null,
   // A atualizacao: versao instalada, se este sistema atualiza sozinho, a release achada e a fase
   // (disponivel, baixando, instalando, erro). "Depois" esconde aquela versao por um dia.
   versao: '', atualizaSozinho: false, atu: null, atuDepois: null, procurando: false
@@ -95,6 +96,7 @@ const ini = n => { const w = n.split(/\s+/).filter(x => /\p{L}/u.test(x) && !/^(
 
 /** O nome de um ramal: o que veio na ligacao ou na mensagem (o PBX manda no From). */
 function nomeDe (r) {
+  if (state.apelidos[r]) return state.apelidos[r]
   if (state.nomes[r]) return state.nomes[r]
   for (let i = state.hist.length - 1; i >= 0; i--) if (state.hist[i].ramal === r && state.hist[i].nome) return state.hist[i].nome
   for (let i = state.convs.length - 1; i >= 0; i--) if (state.convs[i].ramal === r && state.convs[i].nome) return state.convs[i].nome
@@ -314,32 +316,53 @@ function histTipo (h) {
   return h.entrada ? 'Recebida' : 'Feita'
 }
 const histIcone = h => perdida(h) ? ['pmiss', 'var(--crit)'] : emOutroRamal(h) ? ['pin', 'var(--warn)'] : h.entrada ? ['pin', 'var(--ok)'] : ['pout', 'var(--info)']
+// Excluir do historico: o modo de selecao (a lixeira no cabecalho) marca as ligacoes; a confirmacao pergunta se
+// apaga tambem as gravacoes delas (mockup aprovado em 27/11).
+// A linha toda, menos o nome e o fim: so a hora, a conta e o ramal pegariam duas ligacoes do mesmo segundo.
+const chaveHist = h => [h.quando, h.conta, h.ramal, h.entrada, h.atendida, h.duracao, h.gravacao || ''].join('|')
 function renderRecent () {
   const el = $('#recent'); if (!el) return
+  const sel = state.sel
   const todas = [...state.hist].sort((x, y) => y.quando - x.quando)
   const missed = todas.filter(perdida).length
-  const rows = todas.filter(h => state.hseg === 'all' || perdida(h))
-  let grupo = '', body = ''
+  const rows = todas.filter(h => state.hseg === 'all' || perdida(h)).slice(0, 200)
   // Com alguma gravacao na lista, toda linha reserva o lugar do botao de ouvir: as horas ficam alinhadas.
-  const comOuvir = rows.slice(0, 200).some(h => h.gravacao)
-  for (const h of rows.slice(0, 200)) {
+  const comOuvir = !sel && rows.some(h => h.gravacao)
+  let grupo = '', body = ''
+  for (const h of rows) {
     const g = dia(h.quando)
     if (g !== grupo) { grupo = g; body += '<div class="rgrp">' + esc(g) + '</div>' }
-    const d = pessoa(h.ramal), [icon, c] = histIcone(h)
-    const sub = esc(h.ramal) + ' · <span class="k">' + histTipo(h) + '</span>' + (h.duracao ? ' · ' + fmt(h.duracao) : '') + (!h.atendida && !perdida(h) && !emOutroRamal(h) ? ' · ' + esc(h.fim) : '') + (state.contas.length > 1 ? ' · ' + (h.entrada ? 'para ' : 'pelo ') + esc(ramalDaConta(h.conta)) : '')
-    body += '<div class="hrow"><button type="button" class="hmain' + (perdida(h) ? ' missed' : emOutroRamal(h) ? ' outro' : '') + '" data-act="fill" data-v="' + esc(h.ramal) + '" title="Pôr ' + esc(h.ramal) + ' no campo">' +
-      '<span class="dir" style="--c:' + c + '">' + ic(icon) + '</span><span class="tx"><b>' + esc(d.n) + '</b><small>' + sub + '</small></span><span class="when">' + hora(h.quando) + '</span></button>' +
-      (h.gravacao ? '<button type="button" class="iconbtn sm" data-act="ouvir-gravacao" data-v="' + esc(h.gravacao) + '" aria-label="Ouvir a gravação com ' + esc(d.n) + '" title="Ouvir a gravação">' + ic('play') + '</button>' : comOuvir ? '<span class="iconbtn sm oco" aria-hidden="true"></span>' : '') +
-      '<button type="button" class="iconbtn sm go" data-act="call" data-v="' + esc(h.ramal) + '" aria-label="Ligar para ' + esc(d.n) + '" title="Ligar">' + ic('phone') + '</button>' +
-      '<button type="button" class="iconbtn sm" data-act="msg" data-v="' + esc(h.ramal) + '" aria-label="Mensagem para ' + esc(d.n) + '" title="Mensagem">' + ic('chat') + '</button></div>'
+    const d = pessoa(h.ramal), [icon, c] = histIcone(h), k = chaveHist(h), marcada = !!sel && sel.marcadas.has(k)
+    const sub = esc(h.ramal) + ' · <span class="k">' + histTipo(h) + '</span>' + (h.duracao ? ' · ' + fmt(h.duracao) : '') + (!h.atendida && !perdida(h) && !emOutroRamal(h) ? ' · ' + esc(h.fim) : '') + (state.contas.length > 1 ? ' · ' + (h.entrada ? 'para ' : 'pelo ') + esc(ramalDaConta(h.conta)) : '') + (h.gravacao ? ' ' + ic('mic', 'ic gr') : '')
+    const marca = sel ? '<span class="ckbox' + (marcada ? ' on' : '') + '" aria-hidden="true">' + ic('check') + '</span>' : '<span class="dir" style="--c:' + c + '">' + ic(icon) + '</span>'
+    const acao = sel ? ' data-act="marca" data-v="' + esc(k) + '" role="checkbox" aria-checked="' + marcada + '"' : ' data-act="fill" data-v="' + esc(h.ramal) + '" title="Pôr ' + esc(h.ramal) + ' no campo"'
+    body += '<div class="hrow' + (marcada ? ' marcada' : '') + '"><button type="button" class="hmain' + (perdida(h) ? ' missed' : emOutroRamal(h) ? ' outro' : '') + '"' + acao + '>' +
+      marca + '<span class="tx"><b>' + esc(d.n) + '</b><small>' + sub + '</small></span><span class="when">' + hora(h.quando) + '</span></button>' +
+      (sel ? '' : (h.gravacao ? '<button type="button" class="iconbtn sm" data-act="ouvir-gravacao" data-v="' + esc(h.gravacao) + '" aria-label="Ouvir a gravação com ' + esc(d.n) + '" title="Ouvir a gravação">' + ic('play') + '</button>' : comOuvir ? '<span class="iconbtn sm oco" aria-hidden="true"></span>' : '') +
+        '<button type="button" class="iconbtn sm go" data-act="call" data-v="' + esc(h.ramal) + '" aria-label="Ligar para ' + esc(d.n) + '" title="Ligar">' + ic('phone') + '</button>' +
+        '<button type="button" class="iconbtn sm" data-act="msg" data-v="' + esc(h.ramal) + '" aria-label="Mensagem para ' + esc(d.n) + '" title="Mensagem">' + ic('chat') + '</button>') + '</div>'
   }
   const vazio = state.hseg === 'all'
     ? '<div class="empty"><b>Nenhuma ligação ainda</b><span>As ligações feitas e recebidas neste computador aparecem aqui.</span></div>'
     : '<div class="empty"><b>Nenhuma perdida</b><span>Quando alguém ligar e você não atender, aparece aqui.</span></div>'
-  el.innerHTML = '<header class="rhead"><h2>Últimas chamadas</h2><div class="mseg" role="group" aria-label="Filtro">' +
-    '<button type="button" data-act="hseg" data-v="all" aria-pressed="' + (state.hseg === 'all') + '">Todas</button>' +
-    '<button type="button" data-act="hseg" data-v="missed" aria-pressed="' + (state.hseg === 'missed') + '">Perdidas <span class="n">' + missed + '</span></button></div></header>' +
-    '<div class="rlist">' + (body || vazio) + '</div>'
+  const marcadas = sel ? state.hist.filter(h => sel.marcadas.has(chaveHist(h))) : []
+  const n = marcadas.length
+  const cabeca = sel
+    ? '<header class="rhead"><h2>' + (n ? plural(n, 'selecionada', 'selecionadas') : 'Toque nas ligações') + '</h2><div class="selacts">' +
+      '<button type="button" class="btn sm" data-act="marca-todas">' + (n && n === rows.length ? 'Desmarcar' : 'Marcar todas') + '</button>' +
+      '<button type="button" class="btn sm perigo" data-act="exclui-hist"' + (n ? '' : ' disabled') + '>' + ic('trash') + 'Excluir</button>' +
+      '<button type="button" class="btn sm" data-act="sel-sai">Cancelar</button></div></header>'
+    : '<header class="rhead"><h2>Últimas chamadas</h2><div class="rtools"><div class="mseg" role="group" aria-label="Filtro">' +
+      '<button type="button" data-act="hseg" data-v="all" aria-pressed="' + (state.hseg === 'all') + '">Todas</button>' +
+      '<button type="button" data-act="hseg" data-v="missed" aria-pressed="' + (state.hseg === 'missed') + '">Perdidas <span class="n">' + missed + '</span></button></div>' +
+      (state.hist.length ? '<button type="button" class="iconbtn sm" data-act="sel-entra" aria-label="Selecionar para excluir" title="Selecionar para excluir">' + ic('trash') + '</button>' : '') + '</div></header>'
+  const gravadas = marcadas.filter(h => h.gravacao).length
+  const confirma = sel && sel.confirma
+    ? '<div class="confirma" role="alert"><span>Excluir ' + plural(n, 'ligação', 'ligações') + ' do histórico?' +
+      (gravadas ? '<label class="junto"><input type="checkbox" id="exclui-gravacoes"' + (sel.gravacoes ? ' checked' : '') + '> Apagar também ' + (gravadas === 1 ? 'a gravação dela' : 'as ' + gravadas + ' gravações delas') + '</label>' : '') + '</span>' +
+      '<button type="button" class="btn" data-act="exclui-nao">Cancelar</button><button type="button" class="btn perigo" data-act="exclui-sim">Excluir</button></div>'
+    : ''
+  el.innerHTML = cabeca + confirma + '<div class="rlist">' + (body || vazio) + '</div>'
 }
 
 // ---- Conversas ----
@@ -425,16 +448,33 @@ function renderRamais () {
   renderDlist()
   if (finePointer()) { const i = $('#rq'); if (i) { i.focus({ preventScroll: true }); const n = i.value.length; i.setSelectionRange(n, n) } }
 }
+// Presenca (o PBX diz pela assinatura de cada ramal) e o nome dado aqui (o lapis; Enter salva, Esc cancela).
+const PRESENCA = { livre: ['Livre', 'var(--ok)'], ocupado: ['Em ligação', 'var(--crit)'], tocando: ['Tocando', 'var(--warn)'], offline: ['Offline', 'var(--muted-fg)'] }
+function comPresenca (d, size) {
+  const p = PRESENCA[state.presencas[d.r]], a = av(d, size)
+  return p ? a.replace(/<\/span>$/, '<span class="pr" style="--c:' + p[1] + '" title="' + p[0] + '"></span></span>') : a
+}
 function renderDlist () {
   const el = $('#dlist'); if (!el) return
   const q = norm(state.rq.trim())
   const lista = conhecidos().filter(d => !q || norm(d.n).includes(q) || d.r.includes(q))
-  const linha = d => '<div class="drow">' + av(d) + '<div class="tx"><b>' + esc(d.n) + '</b><small>' + (d.conhecido ? esc(d.r) : 'sem nome ainda') + '</small></div>' +
-    '<span class="rnum">' + esc(d.r) + '</span><div class="acts"><button type="button" class="iconbtn sm go" data-act="call" data-v="' + esc(d.r) + '" aria-label="Ligar para ' + esc(d.n) + '" title="Ligar">' + ic('phone') + '</button><button type="button" class="iconbtn sm" data-act="msg" data-v="' + esc(d.r) + '" aria-label="Mensagem para ' + esc(d.n) + '" title="Mensagem">' + ic('chat') + '</button></div></div>'
+  const linha = d => {
+    const p = PRESENCA[state.presencas[d.r]]
+    if (state.editaNome === d.r) {
+      return '<div class="drow editando">' + comPresenca(d) + '<div class="tx"><input class="nome-ed" id="nome-ed" maxlength="60" value="' + esc(state.apelidos[d.r] || (d.conhecido ? d.n : '')) + '" placeholder="Nome para o ' + esc(d.r) + '" aria-label="Nome do ramal ' + esc(d.r) + '">' +
+        '<small>Ramal ' + esc(d.r) + ' · o nome fica só neste computador</small></div><span></span><div class="acts">' +
+        '<button type="button" class="btn sm" data-act="nome-nao">Cancelar</button><button type="button" class="btn sm prim" data-act="nome-sim" data-v="' + esc(d.r) + '">Salvar</button></div></div>'
+    }
+    return '<div class="drow">' + comPresenca(d) + '<div class="tx"><b>' + esc(d.n) + '</b><small>' + (p ? '<span class="pres" style="--c:' + p[1] + '">' + p[0] + '</span>' : '') + (d.conhecido ? esc(d.r) : 'sem nome ainda') + '</small></div>' +
+      '<span class="rnum">' + esc(d.r) + '</span><div class="acts">' +
+      '<button type="button" class="iconbtn sm" data-act="nome-edita" data-v="' + esc(d.r) + '" aria-label="Editar o nome de ' + esc(d.n) + '" title="Editar o nome">' + ic('edit') + '</button>' +
+      '<button type="button" class="iconbtn sm go" data-act="call" data-v="' + esc(d.r) + '" aria-label="Ligar para ' + esc(d.n) + '" title="Ligar">' + ic('phone') + '</button><button type="button" class="iconbtn sm" data-act="msg" data-v="' + esc(d.r) + '" aria-label="Mensagem para ' + esc(d.n) + '" title="Mensagem">' + ic('chat') + '</button></div></div>'
+  }
   const v = state.rq.trim()
   let html = lista.map(linha).join('')
   if (v && ehNumero(v) && !lista.some(d => d.r === v)) html = linha({ r: v, n: 'Ramal ' + v, conhecido: false, h: hue(v) }) + html
   el.innerHTML = html || (q ? '<div class="empty"><b>Ninguém com essa busca</b><span>Digite o número do ramal para ligar ou mandar mensagem.</span></div>' : '<div class="empty"><b>Ninguém por aqui ainda</b><span>Ligue ou mande uma mensagem pela aba Chamadas ou Conversas.</span></div>')
+  const i = $('#nome-ed'); if (i) { i.focus(); i.select() }
 }
 
 // ---- Configuracoes ----
@@ -523,7 +563,7 @@ function secGravacao () {
 }
 async function carregaGravacoes () {
   try { state.grav = await invoke('gravacoes') } catch (e) { state.grav = null; return }
-  if (state.view === 'ajustes' && state.secao === 'audio') renderView()
+  if (state.view === 'ajustes' && (state.secao === 'audio' || state.secao === 'sobre')) renderView()
 }
 // O tocador fica fora do que se redesenha (o historico), para nao recomecar a cada aviso.
 async function ouveGravacao (arquivo) {
@@ -577,12 +617,15 @@ function secJanela () {
       item('Abrir com o sistema', 'Abre só na bandeja ao entrar no computador, pronto para receber ligação.', state.autostart == null ? '<span class="muted">…</span>' : sw('autostart', state.autostart, 'Abrir com o sistema')))
 }
 function secSobre () {
+  // O caminho vai embaixo, em linha inteira: nao espreme o texto (27/11).
+  const caminho = (b, small, valor) => '<div class="item col"><div class="lb"><b>' + b + '</b><small>' + small + '</small></div><div class="mono caminho">' + esc(valor) + '</div></div>'
   return cabeca(brandName(), 'Softphone SIP para o computador, com ligações e mensagens.') +
     grupo('', item('Feito por', '', '<span>Jurandir Moratelli</span><span class="muted">@JJMoratelli</span>') +
       item('Versão', state.atualizaSozinho ? 'As versões novas chegam sozinhas: o app avisa e instala quando você mandar.' : '', '<span class="tab">' + esc(state.versao) + '</span>' +
         (state.atualizaSozinho ? '<button type="button" class="btn sm" data-act="procura-atualizacao"' + (state.procurando ? ' disabled' : '') + '>' + ic('refresh') + (state.procurando ? 'Procurando…' : 'Procurar atualização') + '</button>' : '')) +
       item('Licença', 'Código aberto: github.com/JMoratelli/HexagonCall', '<span>GNU GPL 3</span>') +
-      item('Arquivos', 'Contas, preferências, histórico e conversas, em texto. A senha fica no chaveiro do sistema.', '<span class="mono">' + esc(state.pasta) + '</span>'))
+      caminho('Arquivos', 'Contas, preferências, histórico e conversas, em texto. A senha fica no chaveiro do sistema.', state.pasta) +
+      (state.grav ? caminho('Gravações', 'As ligações gravadas (Ajustes → Áudio).', state.grav.pasta) : ''))
 }
 /** O teste do microfone: atualiza a barra sem redesenhar a tela (o evento vem a cada 100 ms). */
 function mostraNivel (a) {
@@ -694,6 +737,7 @@ const SONS = {
 function aplica (e) {
   state.contas = e.contas; state.prefs = e.preferencias; state.temChaveiro = e.temChaveiro; state.pasta = e.pasta
   state.hist = e.historico; state.convs = e.conversas; state.toques = e.toques || []
+  state.apelidos = e.apelidos || {}; state.presencas = e.presencas || {}
   if (e.chamada && !state.call) {
     const c = e.chamada
     state.call = { id: c.id, kind: c.atendida ? 'active' : c.entrada ? 'incoming' : 'outgoing', r: c.ramal, t0: c.desde * 1000, gravando: c.gravando }
@@ -702,6 +746,11 @@ function aplica (e) {
 }
 function recebe (a) {
   switch (a.tipo) {
+    case 'presenca':
+      state.presencas[a.ramal] = a.estado
+      if (state.view === 'ramais' && !state.editaNome) renderDlist()
+      break
+    case 'abre-conversa': state.open = a.ramal; go('conversas'); { const t = $('#msg-in'); if (t) t.focus() } break
     case 'pbx': {
       const c = state.contas.find(x => x.id === a.conta); if (!c) break
       const mudou = c.semResposta !== a.semResposta || (c.pbxMs == null) !== (a.pbxMs == null)
@@ -865,6 +914,7 @@ function refresh () { renderChrome(); renderStrip(); renderView() }
 function go (v) {
   if (state.testeMic && v !== 'ajustes') invoke('para_teste_microfone').catch(() => {})
   state.view = VIEWS.includes(v) ? v : 'chamadas'
+  state.sel = null; state.editaNome = null
   closePop()
   if (state.view === 'ajustes' && !state.devices) carregaDispositivos()
   if (state.view === 'ajustes') carregaGravacoes()
@@ -966,7 +1016,7 @@ document.addEventListener('click', async e => {
     case 'atualiza-agora': await atualizaAgora(); break
     case 'atualiza-depois': if (state.atu) state.atuDepois = { tag: state.atu.rel.tag, quando: Date.now() }; state.atu = null; renderAtualiza(); break
     case 'procura-atualizacao': await procuraAtualizacao(); break
-    case 'secao': state.secao = v; state.retencao = null; closePop(); renderView(); { const pane = $('#cfgpane'); if (pane) pane.scrollTop = 0 } if (v === 'audio') carregaGravacoes(); break
+    case 'secao': state.secao = v; state.retencao = null; closePop(); renderView(); { const pane = $('#cfgpane'); if (pane) pane.scrollTop = 0 } if (v === 'audio' || v === 'sobre') carregaGravacoes(); break
     case 'retencao': {
       const dias = Number(v), atual = state.prefs.guardarGravacoes == null ? 90 : state.prefs.guardarGravacoes
       if (dias === atual && !state.retencao) break
@@ -988,6 +1038,37 @@ document.addEventListener('click', async e => {
     }
     case 'abre-gravacoes': try { await invoke('abre_pasta_gravacoes') } catch (err) { toast('Não abri a pasta: ' + erroDe(err)) } break
     case 'ouvir-gravacao': await ouveGravacao(v); break
+    case 'sel-entra': state.sel = { marcadas: new Set(), confirma: false, gravacoes: true }; renderRecent(); break
+    case 'sel-sai': state.sel = null; renderRecent(); break
+    case 'marca': if (state.sel) { const m = state.sel.marcadas; if (m.has(v)) m.delete(v); else m.add(v); state.sel.confirma = false; renderRecent() } break
+    case 'marca-todas': {
+      const s = state.sel; if (!s) break
+      const visiveis = [...state.hist].sort((x, y) => y.quando - x.quando).filter(h => state.hseg === 'all' || perdida(h)).slice(0, 200).map(chaveHist)
+      if (s.marcadas.size === visiveis.length) s.marcadas.clear(); else visiveis.forEach(k => s.marcadas.add(k))
+      s.confirma = false; renderRecent(); break
+    }
+    case 'exclui-hist': if (state.sel && state.sel.marcadas.size) { state.sel.confirma = true; renderRecent() } break
+    case 'exclui-nao': if (state.sel) { state.sel.confirma = false; renderRecent() } break
+    case 'exclui-sim': {
+      const s = state.sel; if (!s || !s.marcadas.size) break
+      // A escolha da caixa fica no state (um redesenho no meio nao a desfaz).
+      const gravacoes = !!$('#exclui-gravacoes') && s.gravacoes
+      const itens = state.hist.filter(h => s.marcadas.has(chaveHist(h))).map(h => ({ quando: h.quando, conta: h.conta, ramal: h.ramal, entrada: h.entrada, atendida: h.atendida, duracao: h.duracao, gravacao: h.gravacao || null }))
+      try {
+        const r = await invoke('exclui_historico', { itens, gravacoes })
+        state.hist = state.hist.filter(h => !s.marcadas.has(chaveHist(h)))
+        state.sel = null
+        toast(plural(r.ligacoes, 'ligação excluída', 'ligações excluídas') + (r.gravacoes ? ' e ' + plural(r.gravacoes, 'gravação apagada', 'gravações apagadas') : '') + '.')
+      } catch (err) { toast('Não excluí: ' + erroDe(err)) }
+      renderRecent(); break
+    }
+    case 'nome-edita': state.editaNome = v; renderDlist(); break
+    case 'nome-nao': state.editaNome = null; renderDlist(); break
+    case 'nome-sim': {
+      const i = $('#nome-ed'), nome = i ? i.value : ''
+      try { state.apelidos = await invoke('salva_nome', { ramal: v, nome }); state.editaNome = null; toast(nome.trim() ? 'Nome salvo.' : 'Nome tirado.') } catch (err) { toast('Não salvei: ' + erroDe(err)) }
+      renderDlist(); break
+    }
     case 'ouvir-fecha': fechaGravacao(); break
     case 'ouvir-toque':
       if (state.call) { toast('Durante a ligação, não.'); break }
@@ -1038,6 +1119,7 @@ document.addEventListener('input', e => {
   const t = e.target
   if (t.id === 'cq') { state.cq = t.value; renderClist() }
   else if (t.id === 'rq') { state.rq = t.value; renderDlist() }
+  else if (t.id === 'exclui-gravacoes' && state.sel) state.sel.gravacoes = t.checked
   else if (t.id === 'msg-in') { state.drafts[state.open] = t.value; $('#sendbtn').disabled = !t.value.trim(); autosize() }
   else if (t.id === 'dial-main') { state.dial = t.value.slice(0, 30); renderMatch() }
   else if (t.id === 'dial-transfer') state.dialT = t.value.slice(0, 30)
@@ -1060,6 +1142,7 @@ document.addEventListener('keydown', e => {
   if ((e.key === 'Enter' || e.key === ' ') && t.classList && t.classList.contains('toq')) { e.preventDefault(); t.click(); return }
   if (e.key === 'Escape' && !$('#pop').hidden) { const a = popAnchor; closePop(); if (a) a.focus(); return }
   if (t.id === 'msg-in' && e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); return }
+  if (t.id === 'nome-ed' && (e.key === 'Enter' || e.key === 'Escape')) { e.preventDefault(); const b = $(e.key === 'Enter' ? '[data-act="nome-sim"]' : '[data-act="nome-nao"]'); if (b) b.click(); return }
   if (t.id === 'rq' && e.key === 'Enter') { const g = $('#dlist [data-act="call"]'); if (g) g.click(); return }
   if (t.id === 'cq' && e.key === 'Enter') { const v = t.value.trim(); const primeiroItem = $('#clist .citem'); if (primeiroItem) primeiroItem.click(); else if (v) { state.open = v; state.cq = ''; renderView() } return }
   if (t.id === 'dial-main' && e.key === 'Enter') { e.preventDefault(); const g = document.querySelector('[data-act="dialgo"]'); if (g) g.click(); return }

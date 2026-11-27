@@ -26,6 +26,17 @@ impl Notificacoes {
         self.0.chegando(app, id, quem, ramal);
     }
 
+    /// Uma mensagem chegou com a janela escondida ou atras de outra: quem
+    /// mandou e o texto, com "Responder" (abre a conversa).
+    pub fn mensagem(&self, app: &AppHandle, ramal: &str, nome: Option<&str>, texto: &str) {
+        let quem = match nome {
+            Some(n) => format!("{n} · {ramal}"),
+            None => format!("Ramal {ramal}"),
+        };
+        let corpo: String = texto.chars().take(200).collect();
+        self.0.mensagem(app, ramal, &quem, &corpo);
+    }
+
     /// A ligacao foi atendida pela janela ou acabou: a notificacao sai.
     pub fn fecha(&self, id: &str) {
         self.0.fecha(id);
@@ -65,9 +76,21 @@ fn responde(app: &AppHandle, id: &str, acao: &str) {
     }
 }
 
+/// O clique no aviso da mensagem: abre a janela na conversa.
+#[cfg_attr(windows, allow(dead_code))]
+fn responde_mensagem(app: &AppHandle, ramal: &str, acao: &str) {
+    if !matches!(acao, "default" | "abrir" | "responder") {
+        return;
+    }
+    crate::mostra(app);
+    if let Some(t) = app.try_state::<Arc<Telefone>>() {
+        t.abre_conversa(ramal);
+    }
+}
+
 #[cfg(not(windows))]
 mod sistema {
-    use super::responde;
+    use super::{responde, responde_mensagem};
     use crate::guarda::Flavor;
     #[cfg(all(unix, not(target_os = "macos")))]
     use notify_rust::Hint;
@@ -128,6 +151,27 @@ mod sistema {
                 #[cfg(not(target_os = "linux"))]
                 let _ = &abertas;
                 handle.wait_for_action(|acao| responde(&app, &id, acao));
+            });
+        }
+
+        pub fn mensagem(&self, app: &AppHandle, ramal: &str, quem: &str, corpo: &str) {
+            let mut n = Notification::new();
+            n.appname(self.titulo)
+                .summary(quem)
+                .body(corpo)
+                .icon("mail-message-new")
+                .action("default", "Abrir")
+                .action("responder", "Responder")
+                .urgency(Urgency::Normal);
+            // O som e o do app (o de mensagem), nao o da notificacao.
+            #[cfg(all(unix, not(target_os = "macos")))]
+            n.hint(Hint::Category("im.received".into()))
+                .hint(Hint::SuppressSound(true));
+            let app = app.clone();
+            let ramal = ramal.to_string();
+            std::thread::spawn(move || match n.show() {
+                Ok(h) => h.wait_for_action(|acao| responde_mensagem(&app, &ramal, acao)),
+                Err(e) => debug!("notificacao da mensagem: {e}"),
             });
         }
 
@@ -238,6 +282,10 @@ mod sistema {
                 proximo: AtomicU64::new(1),
             }
         }
+
+        /// O aviso da mensagem no Windows fica para o backlog do Windows
+        /// (docs/estado.md): por ora, so o som e o numero na aba Conversas.
+        pub fn mensagem(&self, _app: &AppHandle, _ramal: &str, _quem: &str, _corpo: &str) {}
 
         pub fn chegando(&self, app: &AppHandle, id: &str, quem: &str, ramal: &str) {
             // O tag tem limite de tamanho (16 no Windows 10 antigo) e o id da

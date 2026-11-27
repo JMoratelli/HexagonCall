@@ -190,6 +190,16 @@ impl Gravacoes {
         apagadas
     }
 
+    /// Apaga uma gravacao (excluir do historico, com a caixa marcada). So um
+    /// nome de gravacao e so arquivo comum, de dentro da pasta.
+    pub fn apaga(&self, arquivo: &str) -> Result<(), String> {
+        let caminho = self.pasta.join(arquivo);
+        if !e_gravacao(arquivo) || !arquivo_comum(&caminho) {
+            return Err(format!("{arquivo}: não é uma gravação"));
+        }
+        fs::remove_file(&caminho).map_err(|e| format!("{arquivo}: {e}"))
+    }
+
     /// O arquivo de uma gravacao, para a tela tocar. So um nome de gravacao,
     /// de dentro da pasta.
     pub fn le(&self, arquivo: &str) -> Result<Vec<u8>, String> {
@@ -442,6 +452,16 @@ mod testes {
             assert!(g.le(link).is_err());
         }
         assert_eq!(g.resumo().quantidade, 2);
+        // Apagar (excluir do historico): so gravacao, so de dentro da pasta.
+        assert!(g.apaga("../contas.toml").is_err());
+        #[cfg(unix)]
+        assert!(
+            g.apaga("2026-11-27_10-30-00_feita_1009.opus").is_err(),
+            "atalho nao"
+        );
+        g.apaga(&b).unwrap();
+        assert!(!g.existe(&b));
+        assert!(g.apaga(&b).is_err(), "a que ja foi");
         fs::remove_dir_all(&p).unwrap();
     }
 

@@ -189,6 +189,27 @@ fn salva_preferencias(app: AppHandle, t: Tel<'_>, mut p: Preferencias) -> Result
     Ok(())
 }
 
+/// Exclui do historico as ligacoes escolhidas (a tela ja confirmou) e, com
+/// `gravacoes`, as gravacoes delas.
+#[tauri::command]
+fn exclui_historico(
+    t: Tel<'_>,
+    itens: Vec<guarda::ChaveHistorico>,
+    gravacoes: bool,
+) -> Result<telefone::Exclusao, String> {
+    t.exclui_historico(&itens, gravacoes)
+}
+
+/// O nome de um ramal, dado em Ramais (vazio tira). Devolve todos.
+#[tauri::command]
+fn salva_nome(
+    t: Tel<'_>,
+    ramal: String,
+    nome: String,
+) -> Result<std::collections::BTreeMap<String, String>, String> {
+    t.grava_nome(&ramal, &nome)
+}
+
 #[tauri::command]
 fn gravacoes(t: Tel<'_>) -> Result<gravacao::Resumo, String> {
     Ok(t.gravacoes()?.resumo())
@@ -574,6 +595,8 @@ fn main() -> std::process::ExitCode {
             remove_conta,
             reconecta,
             salva_preferencias,
+            exclui_historico,
+            salva_nome,
             gravacoes,
             gravacoes_mais_velhas,
             aplica_retencao,

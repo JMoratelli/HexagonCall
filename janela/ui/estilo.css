@@ -226,6 +226,17 @@ kbd { display: inline-block; padding: 0 5px; border: 1px solid var(--border); bo
 .hrow .iconbtn { border-color: transparent; background: none; }
 .hrow .iconbtn:hover { background: var(--card); }
 .hrow .oco { visibility: hidden; }
+/* Excluir do historico: o modo de selecao. */
+.rtools { display: flex; align-items: center; gap: 6px; }
+.selacts { display: flex; flex-wrap: wrap; gap: 6px; }
+.ckbox { display: inline-grid; place-items: center; width: 28px; height: 28px; flex-shrink: 0; border-radius: 8px; border: 1.5px solid var(--border); background: var(--card); color: transparent; }
+.ckbox .ic { width: 15px; height: 15px; stroke-width: 2.4; }
+.ckbox.on { border-color: var(--primary); background: var(--primary); color: var(--on-primary); }
+.hrow.marcada { background: color-mix(in srgb, var(--primary) 9%, transparent); }
+.hrow.marcada:hover { background: color-mix(in srgb, var(--primary) 14%, transparent); }
+.confirma .junto { display: flex; align-items: center; gap: 7px; margin-top: 6px; font-size: 12.5px; }
+.confirma .junto input { accent-color: var(--hang); }
+.ic.gr { width: 12px; height: 12px; vertical-align: -1.5px; color: var(--crit); }
 .dir { display: inline-grid; place-items: center; width: 28px; height: 28px; flex-shrink: 0; border-radius: 8px; color: var(--c); background: color-mix(in srgb, var(--c) var(--tint), var(--card)); }
 .dir .ic { width: 14px; height: 14px; }
 
@@ -467,3 +478,13 @@ body { border: 1px solid var(--border); }
 .opt .dot { margin-left: auto; }
 
 .grupo > #teste-aviso + .item { border-top: 1px solid var(--line); }
+
+/* Ramais: a presenca escrita e o nome dado aqui. */
+.pres { color: var(--c); font-weight: 600; }
+.pres::after { content: "·"; margin-left: 6px; color: var(--muted-fg); font-weight: 400; }
+.drow.editando { background: var(--muted); }
+.drow.editando small { margin-top: 4px; }
+.nome-ed { width: 100%; height: 32px; padding: 0 10px; border: 1px solid var(--primary); border-radius: 9px; background: var(--card); font: 600 13.5px var(--f-body); color: var(--foreground); outline: 0; box-shadow: 0 0 0 3px color-mix(in srgb, var(--ring) 22%, transparent); }
+/* Sobre: o caminho embaixo, em linha inteira. */
+.grupo > .item.col { flex-direction: column; align-items: stretch; gap: 8px; }
+.caminho { padding: 8px 10px; border-radius: 9px; background: var(--muted); font-size: 12.5px; }

@@ -856,60 +856,47 @@ mod rede {
     }
 }
 
-/// No Linux, pelo libsoup, o mesmo HTTP do WebKitGTK que desenha a janela
-/// (ja vem com ele): o proxy e os certificados do sistema, sem TLS de fora.
+/// No Linux, pelo ureq (Rust puro, so HTTP/1.1). Ate a 1.1.0 era o libsoup do
+/// WebKitGTK, e o HTTP/2 do libsoup 3.0 que vai na AppImage (o do Ubuntu 22.04)
+/// abortava o app ao falar com o GitHub, na checagem de 30 s depois de abrir.
 #[cfg(target_os = "linux")]
 mod rede {
-    use soup::gio::Cancellable;
-    use soup::prelude::*;
-    use soup::{Message, Session};
     use std::io::{Read, Write};
     use std::path::Path;
+    use std::time::Duration;
 
     const AGENTE: &str = "HexagonCall-Atualizador";
+    /// A lista de versoes e o SHA256SUMS sao pequenos; mais que isto e erro.
+    const TEXTO_MAXIMO: u64 = 8 * 1024 * 1024;
 
-    /// Uma sessao por pedido: a do libsoup so serve na thread em que nasceu,
-    /// e cada pedido vem de uma thread de trabalho.
-    fn sessao() -> Session {
-        let s = Session::new();
-        s.set_user_agent(AGENTE);
-        // Segundos sem nada chegar, nao a duracao do download.
-        s.set_timeout(60);
-        s
+    /// `corpo`: o tempo para o corpo inteiro chegar (o pacote leva mais).
+    fn agente(corpo: Duration) -> ureq::Agent {
+        ureq::Agent::config_builder()
+            .user_agent(AGENTE)
+            .http_status_as_error(false)
+            .timeout_connect(Some(Duration::from_secs(30)))
+            .timeout_recv_response(Some(Duration::from_secs(60)))
+            .timeout_recv_body(Some(corpo))
+            .build()
+            .into()
     }
 
-    fn pedido(url: &str, api: bool) -> Result<Message, String> {
-        let msg = Message::new("GET", url).map_err(|e| format!("endereço inválido: {e}"))?;
-        if let Some(h) = msg.request_headers() {
+    fn pede(
+        url: &str,
+        api: bool,
+        corpo: Duration,
+    ) -> Result<ureq::http::Response<ureq::Body>, String> {
+        let mut pedido = agente(corpo)
+            .get(url)
             // Sem cache: a lista de versoes tem de vir do servidor sempre.
-            h.append("Cache-Control", "no-cache");
-            if api {
-                h.append("Accept", "application/vnd.github+json");
-            }
+            .header("Cache-Control", "no-cache");
+        if api {
+            pedido = pedido.header("Accept", "application/vnd.github+json");
         }
-        Ok(msg)
-    }
-
-    /// O tamanho do que vai chegar, quando da para conferir: comprimido no
-    /// caminho (um proxy com gzip), o Content-Length e o do comprimido, e o
-    /// libsoup entrega o descomprimido. Ai so o sha256 confere.
-    fn tamanho(msg: &Message) -> u64 {
-        let Some(h) = msg.response_headers() else {
-            return 0;
-        };
-        let comprimido = h
-            .one("Content-Encoding")
-            .is_some_and(|c| !c.trim().eq_ignore_ascii_case("identity"));
-        if comprimido {
-            return 0;
-        }
-        u64::try_from(h.content_length()).unwrap_or(0)
-    }
-
-    fn confere(msg: &Message) -> Result<(), String> {
-        let codigo = msg.status_code();
+        let resposta = pedido.call().map_err(|e| e.to_string())?;
+        let codigo = resposta.status().as_u16();
         if (200..300).contains(&codigo) {
-            Ok(())
+            Ok(resposta)
         } else {
             Err(format!("o servidor respondeu {codigo}"))
         }
@@ -917,35 +904,27 @@ mod rede {
 
     /// GET de um texto. `api`: pede JSON da API do GitHub.
     pub fn texto(url: &str, api: bool) -> Result<String, String> {
-        let msg = pedido(url, api)?;
-        let corpo = sessao()
-            .send_and_read(&msg, Cancellable::NONE)
-            .map_err(|e| e.message().to_string())?;
-        confere(&msg)?;
-        String::from_utf8(corpo.to_vec()).map_err(|_| "a resposta não é texto".to_string())
+        let mut resposta = pede(url, api, Duration::from_secs(60))?;
+        resposta
+            .body_mut()
+            .with_config()
+            .limit(TEXTO_MAXIMO)
+            .read_to_string()
+            .map_err(|e| e.to_string())
     }
 
-    /// Baixa `url` para `destino`, avisando o progresso. O libsoup segue os
+    /// Baixa `url` para `destino`, avisando o progresso. O ureq segue os
     /// redirecionamentos (o anexo da release vai para outro servidor).
     pub fn baixa(
         url: &str,
         destino: &Path,
         progresso: &(dyn Fn(f64) + Sync),
     ) -> Result<(), String> {
-        let msg = pedido(url, false)?;
-        // O pacote vem como esta (sem gzip): o tamanho confere e o progresso
-        // e o de verdade.
-        if let Some(h) = msg.request_headers() {
-            h.replace("Accept-Encoding", "identity");
-        }
-        let fluxo = sessao()
-            .send(&msg, Cancellable::NONE)
-            .map_err(|e| e.message().to_string())?;
-        confere(&msg)?;
-        let total = tamanho(&msg);
+        let mut resposta = pede(url, false, Duration::from_secs(30 * 60))?;
+        let total = resposta.body().content_length().unwrap_or(0);
         let local = |e: std::io::Error| format!("{}: {e}", destino.display());
         let mut f = std::fs::File::create(destino).map_err(local)?;
-        let mut leitor = fluxo.into_read();
+        let mut leitor = resposta.body_mut().as_reader();
         let mut buf = vec![0u8; 1 << 16];
         let mut lidos: u64 = 0;
         loop {

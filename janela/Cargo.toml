@@ -39,10 +39,14 @@ workspace = true
 [target.'cfg(not(windows))'.dependencies]
 notify-rust = "4.19.0"
 
-# O HTTP do atualizador no Linux: o libsoup que o WebKitGTK ja traz (o proxy e
-# os certificados do sistema, sem TLS de fora). A mesma versao do Tauri.
+# O HTTP do atualizador no Linux: o ureq, em Rust puro e so HTTP/1.1, com o
+# rustls e os certificados da Mozilla (webpki-roots). O libsoup do WebKitGTK,
+# usado ate a 1.1.0, derrubava o app: o HTTP/2 do libsoup 3.0 do Ubuntu 22.04
+# (o da AppImage) abortava ao falar com o GitHub. Com gzip: o que vem
+# comprimido (um proxy que comprime mesmo o pacote) chega descomprimido, e ai
+# so o sha256 confere o tamanho. O proxy vem do ambiente (HTTPS_PROXY).
 [target.'cfg(target_os = "linux")'.dependencies]
-soup3 = "0.5.0"
+ureq = { version = "3.5.2", default-features = false, features = ["rustls", "gzip"] }
 zbus = "5.19.0"
 
 # No Windows, o toast da ligacao (WinRT, com o nome e o icone do app), o

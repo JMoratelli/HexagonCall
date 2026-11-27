@@ -92,6 +92,16 @@ O que está validado, o que falta e as decisões tomadas. Atualizar ao fim de ca
   trava, a conta parada se reconecta pelo próprio indicador (a tela Contas some). O completar roda depois da trava de
   instância única. Fica como está: mudar uma opção pela tela regrava o arquivo sem os comentários; com a trava, apagar
   gravações pelo histórico continua liberado (não foi pedido travar).
+- **A AppImage caía ao procurar atualização** (achado por ele em 27/11, com a 1.1.0 publicada): o atualizador do
+  Linux falava com o GitHub pelo libsoup do WebKitGTK, e o libsoup 3.0 que vai na AppImage (o do Ubuntu 22.04) abortava
+  no HTTP/2 (`io_read: runtime check failed`, `nghttp2_rcbuf_decref: rcbuf->ref > 0`, SIGABRT e SIGSEGV). Como a
+  checagem roda 30 s depois de abrir, o app caía a cada abertura assim que havia versão nova. Os testes de ponta a
+  ponta usavam um servidor local em HTTP/1.1, e o caminho do HTTP/2 nunca rodou. Esse libsoup não tem como forçar o
+  HTTP/1.1 (o `set_force_http1` é do 3.4). Correção (1.1.1): o atualizador do Linux passou para o `ureq` (Rust puro,
+  só HTTP/1.1, rustls com os certificados da Mozilla, gzip, proxy pelo `HTTPS_PROXY`), conferido contra o GitHub de
+  verdade (lista, `SHA256SUMS`, a AppImage de 97 MB em 6 s, sha256 certo). Quem tem a 1.0.0 ou a 1.1.0 no Linux
+  precisa trocar a AppImage à mão uma vez: a velha cai antes de se atualizar. O Windows usa o `Windows.Web.Http`, e
+  a checagem contra o GitHub de verdade ainda não foi vista nele.
 - **Release 1.1.0** (pedido dele em 27/11, menor e não 1.0.1 porque traz função nova): os toques fortes, o
   `ocultaConfig`, o status com não perturbe e a correção do registro que o offline do próprio ramal derrubava.
 - **Status e não perturbe** (pedido dele em 27/11): o indicador da conta, no alto, vira o botão do status. Abre
@@ -379,6 +389,6 @@ aberto:
    No Windows o toast da ligação usa o AUMID do app (`janela/src/aumid.rs`).
    Pacote do Linux (26/11): a AppImage `HexagonCall-X.Y.Z-x86_64.AppImage` (`pacote/linux.sh`, empacotada pelo CLI do
    Tauri num Ubuntu 22.04), na mesma release do Windows, com um `SHA256SUMS.txt` só para os dois. A atualização é o
-   mesmo motor (rede pelo libsoup do WebKitGTK): a nova toma o lugar do arquivo da que está rodando e abre quando a
+   mesmo motor (rede pelo ureq desde a 1.1.1; até a 1.1.0, pelo libsoup do WebKitGTK): a nova toma o lugar do arquivo da que está rodando e abre quando a
    velha sai; a nova e a anterior ficam em `~/.cache/hexagon-call`. Rodando de uma AppImage, o app põe o próprio atalho
    no menu (`janela/src/atalho.rs`), a menos que o Gear Lever ou o AppImageLauncher já tenham posto o deles.

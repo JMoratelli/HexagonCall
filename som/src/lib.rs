@@ -196,12 +196,7 @@ impl Microfone {
     /// `id` da lista de `microfones()`; `None` e o padrao do sistema. Sem
     /// limpeza (o teste do microfone mede o que ele capta de verdade).
     pub fn abre(id: Option<&str>) -> Result<Self, ErroSom> {
-        let nada = Limpeza {
-            eco: false,
-            ruido: false,
-            nitida: false,
-        };
-        Self::abre_limpo(id, nada, None)
+        Self::abre_limpo(id, Limpeza::NADA, None)
     }
 
     /// O microfone da ligacao: tira o eco com a `referencia` do alto-falante
@@ -331,9 +326,10 @@ pub struct AltoFalante {
 }
 
 impl AltoFalante {
-    /// `id` da lista de `alto_falantes()`; `None` e o padrao do sistema.
+    /// `id` da lista de `alto_falantes()`; `None` e o padrao do sistema. Sem
+    /// limpeza.
     pub fn abre(id: Option<&str>) -> Result<Self, ErroSom> {
-        Self::abre_limpo(id, Limpeza::default(), None)
+        Self::abre_limpo(id, Limpeza::NADA, None)
     }
 
     /// O alto-falante da ligacao: poe na `referencia` o que tocou (para o

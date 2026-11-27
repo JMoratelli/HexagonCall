@@ -548,7 +548,7 @@ function secAudio () {
     grupo('Qualidade da voz',
       item('Cancelar o eco', 'Com caixa de som em vez de headset, o outro lado não ouve a própria voz de volta.', sw('cancelarEco', p.cancelarEco !== false, 'Cancelar o eco')) +
       item('Reduzir o ruído do microfone', 'Tira o ruído constante daqui (ventilador, ar-condicionado) do que vai para o outro lado.', sw('reduzirRuido', p.reduzirRuido !== false, 'Reduzir o ruído do microfone')) +
-      item('Voz mais nítida', 'Limpa o ruído do que chega do outro lado. Vale a partir da próxima ligação, como as outras.', sw('vozNitida', p.vozNitida, 'Voz mais nítida'))) +
+      item('Voz mais nítida', 'Limpa o ruído do que chega do outro lado. Vale a partir da próxima ligação, como as outras.', sw('vozNitida', p.vozNitida !== false, 'Voz mais nítida'))) +
     secGravacao()
 }
 function secGravacao () {

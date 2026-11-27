@@ -67,8 +67,8 @@ O que está validado, o que falta e as decisões tomadas. Atualizar ao fim de ca
   (`sonora` 0.3.0, BSD-3, sem C), no microfone, com a referência do que o alto-falante tocou de verdade (o callback
   da placa). Na bancada tirou uns 33 dB de eco, como o C++ oficial; com headset fica transparente. **Ligado por
   padrão**, como a supressão de ruído moderada do mesmo WebRTC no microfone. A **voz mais nítida** (o RNNoise,
-  `nnnoiseless`, Rust puro) limpa o que chega do outro lado, como ele sugeriu; opcional, desligada (pode engolir
-  uma voz fraca). O eco só se tira no envio: só ele tem a referência. Tudo junto custa perto de 1% de um núcleo.
+  `nnnoiseless`, Rust puro) limpa o que chega do outro lado, como ele sugeriu; também ligada por padrão (pedido
+  dele em 27/11, depois de usar: "melhora bem a experiência"). O eco só se tira no envio: só ele tem a referência. Tudo junto custa perto de 1% de um núcleo.
   Achado que pesou no desenho: o microfone e a referência perdem amostras juntos, no mesmo ponto; um corte só de um
   lado (a folga do microfone) faz o eco voltar por segundos. Descartados: o `webrtc-audio-processing` (C++), que não
   compila no MSVC e no Ubuntu 22.04 pede meson novo e baixa o abseil; o Speex, mais fraco; o DeepFilterNet3, +31 MB.
@@ -100,8 +100,8 @@ Aprovado por ele ("minimalista, bonitinho") e feito no app no mesmo dia:
 
 ### Qualidade da voz (27/11), no app
 
-Ajustes → Áudio → Qualidade da voz: "Cancelar o eco" e "Reduzir o ruído do microfone" ligados, "Voz mais nítida"
-desligada; valem a partir da próxima ligação. Cada ligação cria a referência (`som::eco::Referencia`): o
+Ajustes → Áudio → Qualidade da voz: "Cancelar o eco", "Reduzir o ruído do microfone" e "Voz mais nítida", as três
+ligadas por padrão (pedido de 27/11); valem a partir da próxima ligação. Cada ligação cria a referência (`som::eco::Referencia`): o
 alto-falante põe nela o que tocou, o microfone tira o eco com ela (em blocos de 10 ms na taxa da placa, antes de
 converter para 8 kHz), e o microfone trocado no meio da ligação pega a mesma quando o velho a solta. Um erro ou
 pânico no processador desliga a limpeza naquela ligação, e o som segue. A voz mais nítida só funciona com a saída a

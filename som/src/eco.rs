@@ -29,14 +29,24 @@ pub struct Limpeza {
     pub nitida: bool,
 }
 
+/// As tres ligadas (padrao do app desde 27/11).
 impl Default for Limpeza {
     fn default() -> Self {
         Self {
             eco: true,
             ruido: true,
-            nitida: false,
+            nitida: true,
         }
     }
+}
+
+impl Limpeza {
+    /// Nada: o som como a placa da (o teste do microfone, o toque).
+    pub const NADA: Self = Self {
+        eco: false,
+        ruido: false,
+        nitida: false,
+    };
 }
 
 /// A referencia mais adiantada que isto (o alto-falante andou mais que o

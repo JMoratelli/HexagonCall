@@ -139,7 +139,8 @@ pub struct Preferencias {
     pub cancelar_eco: bool,
     /// Tirar o ruido constante do microfone (ligado de padrao).
     pub reduzir_ruido: bool,
-    /// Limpar o que chega do outro lado (RNNoise; desligado de padrao).
+    /// Limpar o que chega do outro lado (RNNoise; ligado de padrao, como os
+    /// outros dois: pedido de 27/11).
     pub voz_nitida: bool,
 }
 
@@ -161,7 +162,7 @@ impl Default for Preferencias {
             guardar_gravacoes: 90,
             cancelar_eco: true,
             reduzir_ruido: true,
-            voz_nitida: false,
+            voz_nitida: true,
         }
     }
 }

@@ -65,12 +65,12 @@ impl Gravacoes {
         ramal: &str,
         nome: Option<&str>,
     ) -> Result<(String, Gravacao), String> {
-        use chrono::TimeZone;
         fs::create_dir_all(&self.pasta).map_err(|e| format!("{}: {e}", self.pasta.display()))?;
         let quando = i64::try_from(inicio)
             .ok()
-            .and_then(|s| chrono::Local.timestamp_opt(s, 0).single())
-            .unwrap_or_else(chrono::Local::now);
+            .and_then(|s| jiff::Timestamp::from_second(s).ok())
+            .unwrap_or_else(jiff::Timestamp::now)
+            .to_zoned_datetime(jiff::tz::TimeZone::system());
         let sentido = if entrada { "recebida" } else { "feita" };
         let quem = match nome {
             Some(n) if !n.is_empty() => format!("{n} ({ramal})"),
@@ -82,11 +82,11 @@ impl Gravacoes {
             } else {
                 format!("Ligação feita para {quem}")
             },
-            data: quando.to_rfc3339_opts(chrono::SecondsFormat::Secs, false),
+            data: quando.strftime("%Y-%m-%dT%H:%M:%S%:z").to_string(),
         };
         let base = format!(
             "{}_{sentido}_{}",
-            quando.format("%Y-%m-%d_%H-%M-%S"),
+            quando.strftime("%Y-%m-%d_%H-%M-%S"),
             limpa_ramal(ramal)
         );
         // Duas no mesmo segundo com o mesmo ramal: -2, -3... (nunca por cima).
@@ -417,6 +417,13 @@ mod testes {
         let (b, mut gb) = g.nova(1_790_000_000, true, "1002", None).unwrap();
         assert!(e_gravacao(&a), "{a}");
         assert!(a.ends_with("_recebida_1002.opus"), "{a}");
+        // O nome leva a hora local do comeco da ligacao (`quando` do historico).
+        let local = jiff::Timestamp::from_second(1_790_000_000)
+            .unwrap()
+            .to_zoned_datetime(jiff::tz::TimeZone::system())
+            .strftime("%Y-%m-%d_%H-%M-%S")
+            .to_string();
+        assert!(a.starts_with(&local), "{a} x {local}");
         assert!(b.ends_with("_recebida_1002-2.opus"), "{b}");
         let q = [0i16; motor::midia::AMOSTRAS];
         ga.quadro(&q, &q);

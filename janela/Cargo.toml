@@ -12,9 +12,10 @@ publish = false
 tauri-build = { version = "2.7.6", features = [] }
 
 [dependencies]
-# A data local no nome das gravacoes (o mesmo chrono que o Tauri ja traz).
-chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 dirs = "7.0.0"
+# A data local no nome das gravacoes (o mesmo jiff que ja vem pelas
+# dependencias; o chrono esta sem manutencao, RUSTSEC-2026-0543).
+jiff = "1.0.3"
 keyring = "4.2.0"
 motor = { path = "../motor" }
 nucleo = { path = "../nucleo" }

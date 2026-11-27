@@ -48,8 +48,14 @@ O que está validado, o que falta e as decisões tomadas. Atualizar ao fim de ca
   90 dias, 1 ano ou sempre (90 de padrão), aplicada ao abrir e a cada 6 horas; escolher um prazo que apagaria alguma
   gravação agora pede confirmação. O "Ouvir" no histórico toca dentro do app.
 - **Só a interface do app**: o menu do navegador (Inspecionar, Recarregar) e os atalhos dele (F5, Ctrl+R, Ctrl+P,
-  Ctrl+F, o inspetor) desligados pela tela, nos dois sistemas; nos campos de texto o menu de copiar e colar fica. O
-  WebView2 tem uma opção própria para os atalhos, mas o Tauri não a expõe, e chamá-la direto pediria `unsafe`.
+  Ctrl+F, o inspetor) desligados pela tela, nos dois sistemas; nos campos de texto o menu de copiar e colar fica (no
+  Linux; no Windows não, ver abaixo). O WebView2 tem uma opção própria para os atalhos, mas o Tauri não a expõe, e
+  chamá-la direto pediria `unsafe`.
+- **No Windows, sem o botão direito também nos campos** (pedido dele em 27/11): o menu do WebView2 nos campos de uma
+  linha trazia o "Importar Senhas" do Edge, que abria uma janela solta do Edge com erro
+  (`edge://settings/autofill/passwords`, ERR_INVALID_URL). Não sai com `autocomplete="off"`, com
+  `generalAutofillEnabled: false` nem desligando as features do Edge; o `ContextMenuRequested` do WebView2, que tiraria
+  só o item, pede `unsafe`. Copiar e colar seguem pelo teclado (Ctrl+C, Ctrl+V).
 
 ### Mais decisões de 27/11
 
@@ -122,12 +128,6 @@ Só depois que o app do Linux estiver pronto. **Ao fazer e validar cada item no 
   Windows, mas nada foi ouvido nele: a VM de teste não tem placa de som).
 - [ ] Aviso de mensagem nova como toast (no Linux é a notificação com "Responder"; no Windows, por ora, só o som e o
   número na aba Conversas: `notificacao.rs`, `mensagem`).
-- [ ] O menu do botão direito nos campos de uma linha (discar, as buscas) traz o "Importar Senhas" do Edge, que abre
-  uma janela solta do Edge com erro (`edge://settings/autofill/passwords`, ERR_INVALID_URL). Na caixa de mensagem não
-  aparece. Não sai com `autocomplete="off"` (já está nos campos), com `generalAutofillEnabled: false` nem desligando
-  as features do Edge (`--disable-features`, todas as de senha, autofill e carteira); o `ContextMenuRequested` do
-  WebView2, que tiraria o item, pede `unsafe`. Saída sem `unsafe`: um menu do próprio app nos campos (Recortar,
-  Copiar, Colar, Selecionar tudo), com a área de transferência liberada para a página (`enable_clipboard_access`).
 
 ## O PBX de teste
 
@@ -208,7 +208,8 @@ O que o Linux validou desde 26/11, repetido no Windows com o app em release cont
   (o Windows devolve o ICMP como erro 10054 no `recv`), o rsipstack só avisa no log e segue; volta igual.
 - [x] Menu e atalhos do navegador: F5, Ctrl+R, Ctrl+Shift+R, Ctrl+P, F, S, O, U, J, H, G, F3, F7, F11, F12,
   Ctrl+Shift+I/J/C, Alt+←, zoom pelo teclado: nada recarrega (o número digitado fica no campo), nada abre. O botão
-  direito fora dos campos não abre menu; nos campos, o de editar (com o "Importar Senhas", no backlog acima).
+  direito não abre menu em lugar nenhum, nem nos campos (discar, as buscas, a mensagem), pelo mouse e pelo Shift+F10;
+  Ctrl+V cola e Ctrl+C copia no campo.
 - [x] Nomes em Ramais (o `nomes.toml`, e o nome novo no histórico) e a mensagem com a janela escondida (sem toast, como
   diz o backlog; o "1" em Conversas).
 - [x] Atualização de ponta a ponta com o atualizador novo, com o download lento de propósito: uma ligação que chegou no

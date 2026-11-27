@@ -1132,7 +1132,10 @@ document.addEventListener('input', e => {
 })
 // So a interface do app: sem o menu do navegador (Inspecionar, Recarregar, Imprimir) e sem os atalhos dele
 // (recarregar, imprimir, buscar, salvar, voltar, o inspetor). Nos campos de texto o menu fica: copiar e colar.
-document.addEventListener('contextmenu', e => { if (!e.target.closest('input, textarea')) e.preventDefault() })
+// No Windows nem nos campos: o menu do WebView2 traz o "Importar Senhas" do Edge, que abre uma janela solta com erro e
+// nao sai sem unsafe. Copiar e colar seguem pelo teclado (Ctrl+C, Ctrl+V).
+const semMenuNosCampos = /Windows/.test(navigator.userAgent)
+document.addEventListener('contextmenu', e => { if (semMenuNosCampos || !e.target.closest('input, textarea')) e.preventDefault() })
 document.addEventListener('keydown', e => {
   const k = e.key.length === 1 ? e.key.toLowerCase() : e.key, ctrl = e.ctrlKey || e.metaKey
   const doNavegador = ['F1', 'F3', 'F5', 'F7', 'F11', 'F12', 'BrowserBack', 'BrowserForward', 'BrowserRefresh'].includes(e.key) ||

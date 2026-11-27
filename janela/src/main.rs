@@ -173,7 +173,12 @@ fn so_sem_administrador(t: &Telefone) -> Result<(), String> {
 
 #[tauri::command]
 async fn salva_conta(t: Tel<'_>, conta: FormConta) -> Result<Estado, String> {
-    so_sem_administrador(&t)?;
+    // A primeira conta se cadastra mesmo com ocultaConfig (27/11): e o primeiro
+    // passo da instalacao, e so depois dela as contas somem da tela.
+    let primeira = conta.id_antigo.is_none() && t.guarda().contas().is_ok_and(|c| c.is_empty());
+    if !primeira {
+        so_sem_administrador(&t)?;
+    }
     let tel = Arc::clone(&t);
     tel.salva_conta(conta).await?;
     Ok(tel.estado())

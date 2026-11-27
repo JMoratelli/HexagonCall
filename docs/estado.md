@@ -104,6 +104,10 @@ O que está validado, o que falta e as decisões tomadas. Atualizar ao fim de ca
   a checagem contra o GitHub de verdade ainda não foi vista nele.
 - **Release 1.1.0** (pedido dele em 27/11, menor e não 1.0.1 porque traz função nova): os toques fortes, o
   `ocultaConfig`, o status com não perturbe e a correção do registro que o offline do próprio ramal derrubava.
+- **A primeira conta com `ocultaConfig`** (pedido dele em 27/11, para o LinuxMachines instalar o M Calls): sem conta
+  nenhuma, o app abre no cadastro mesmo com a trava, e o Rust aceita a primeira conta nova (`salva_conta` sem
+  `idAntigo` e com o `contas.toml` vazio); depois dela, Contas some e a tela vai para o teclado. Assim o ramal e a
+  senha (no chaveiro) entram no primeiro uso, como parte da instalação, e o resto vem do arquivo.
 - **Status e não perturbe** (pedido dele em 27/11): o indicador da conta, no alto, vira o botão do status. Abre
   "Disponível" e "Não perturbe", a conexão de cada conta (com o Reconectar quando ela parou) e o atalho para Contas
   (fora do `ocultaConfig`). No não perturbe, a ligação que chega é recusada como ocupado (486, o mesmo de quando já há

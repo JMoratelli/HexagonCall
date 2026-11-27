@@ -100,7 +100,9 @@ Para quem administra muitos computadores (um callcenter, por exemplo), o `prefer
 Áudio mostra só o primeiro bloco (microfone, alto-falante, pausar música). O resto vem dos arquivos, e a tela não muda.
 Na pasta do usuário (`~/.config/hexagon-call`; no Windows, `%APPDATA%\hexagon-call`):
 
-- `contas.toml`: um `[[conta]]` por ramal, com `usuario`, `dominio` e, se quiser, `nome` e `porta`;
+- `contas.toml`: um `[[conta]]` por ramal, com `usuario`, `dominio` e, se quiser, `nome` e `porta`. Sem ele, a
+  primeira conta se cadastra na tela mesmo com `ocultaConfig = 1`, e a senha vai para o chaveiro; depois dela, Contas
+  some;
 - `senhas.toml`: a senha de cada conta, em `[senhas]`, como `"1001@pbx.exemplo.com.br" = "..."`, legível só pelo
   usuário. O app procura a senha no chaveiro e, se não achar, neste arquivo;
 - `preferencias.toml`: `ocultaConfig = 1` e o que mais quiser, como `toque = "alerta"`, `toqueNoMaximo = 1` ou

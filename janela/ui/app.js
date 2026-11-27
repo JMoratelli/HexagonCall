@@ -161,8 +161,7 @@ function renderChrome () {
   const unread = Object.values(state.naoLidas).reduce((a, b) => a + b, 0)
   const c = contaPrincipal()
   let status
-  if (!c && oculta()) status = '<span class="status" style="--c:var(--warn);cursor:default" title="Nenhum ramal neste computador: fale com o administrador"><span class="dot"></span>Sem conta</span>'
-  else if (!c) status = '<button type="button" class="status" style="--c:var(--warn)" data-act="nova-conta" title="Cadastre o seu ramal"><span class="dot"></span>Sem conta</button>'
+  if (!c) status = '<button type="button" class="status" style="--c:var(--warn)" data-act="nova-conta" title="Cadastre o seu ramal"><span class="dot"></span>Sem conta</button>'
   else {
     // O botao do status (27/11) abre o Disponivel/Nao perturbe, a conexao de cada conta e o Reconectar. Um problema
     // da conta tem a vez no texto; o nao perturbe fica sempre na barrinha do ponto.
@@ -204,11 +203,6 @@ function renderStrip () {
 // ---- Chamadas ----
 function renderChamadas () {
   state.missedNew = 0
-  if (!state.contas.length && oculta()) {
-    $('#content').innerHTML = '<div class="boasvindas"><div class="lattice" aria-hidden="true"></div><span class="marca">' + MARK + '</span><h2>Nenhum ramal neste computador</h2>' +
-      '<p>O ramal deste computador é configurado pelo administrador. Fale com ele.</p></div>'
-    return
-  }
   if (!state.contas.length) {
     $('#content').innerHTML = '<div class="boasvindas"><div class="lattice" aria-hidden="true"></div><span class="marca">' + MARK + '</span><h2>Cadastre o seu ramal para começar</h2>' +
       '<p>O ramal, o servidor do PBX e a senha. A senha fica no chaveiro do sistema' + (state.temChaveiro ? '' : ' (nesta máquina não há chaveiro: ela fica num arquivo só seu)') + '.</p>' +
@@ -506,8 +500,10 @@ function formHTML () {
 }
 const SECOES = [['contas', 'Contas', 'user'], ['audio', 'Áudio', 'mic'], ['toques', 'Toques e sons', 'bell'], ['aparencia', 'Aparência', 'sun'], ['janela', 'Janela', 'janela'], ['sobre', 'Sobre', 'info']]
 // ocultaConfig = 1 no preferencias.toml (27/11, para instalar em massa): Contas, Toques e sons e Janela somem, e em
-// Audio fica so o primeiro bloco. Quem administra muda o resto no arquivo (o Rust tambem recusa pela tela).
+// Audio fica so o primeiro bloco. Quem administra muda o resto no arquivo (o Rust tambem recusa pela tela). Sem
+// conta nenhuma, Contas fica: a primeira configuracao (o ramal e a senha) faz parte da instalacao.
 const oculta = () => !!state.prefs.ocultaConfig
+const primeiraConta = () => !state.contas.length
 // Nao perturbe (27/11): recusa as ligacoes que chegam como ocupado. permitirNaoPerturbe = 0 no arquivo tira a opcao.
 const podeNaoPerturbe = () => state.prefs.permitirNaoPerturbe !== false
 const emNaoPerturbe = () => !!state.prefs.naoPerturbe && podeNaoPerturbe()
@@ -526,7 +522,7 @@ function statusHTML () {
     : '<div class="pop-title">Conexão</div>') +
     contas + (oculta() ? '' : '<div class="pop-acoes"><button type="button" class="btn sm" data-act="pop-contas">' + ic('user') + 'Contas</button></div>')
 }
-const secoesVistas = () => oculta() ? SECOES.filter(s => ['audio', 'aparencia', 'sobre'].includes(s[0])) : SECOES
+const secoesVistas = () => oculta() ? SECOES.filter(s => ['audio', 'aparencia', 'sobre'].includes(s[0]) || (s[0] === 'contas' && primeiraConta())) : SECOES
 const item = (b, small, vl) => '<div class="item"><div class="lb"><b>' + b + '</b>' + (small ? '<small>' + small + '</small>' : '') + '</div><div class="vl">' + vl + '</div></div>'
 const grupo = (titulo, itens) => (titulo ? '<div class="grupo-titulo">' + titulo + '</div>' : '') + '<div class="grupo">' + itens + '</div>'
 const cabeca = (titulo, texto) => '<header class="cfghead"><h2>' + titulo + '</h2>' + (texto ? '<p>' + texto + '</p>' : '') + '</header>'
@@ -702,6 +698,8 @@ async function salvaForm () {
   try {
     const e = await invoke('salva_conta', { conta: { idAntigo: f.idAntigo, usuario: f.usuario.trim(), dominio: f.dominio.trim(), porta, nome: f.nome.trim() || null, registra: f.registra, principal: f.principal, senha: f.senha || null } })
     aplica(e); state.form = null; toast('Conta salva. Conectando ao PBX…')
+    // Com ocultaConfig, Contas some depois da primeira: segue para o teclado.
+    if (oculta()) { go('chamadas'); return }
   } catch (e) {
     f.salvando = false; f.erro = erroDe(e)
   }
@@ -1019,7 +1017,7 @@ document.addEventListener('click', async e => {
     case 'hold':
       if (c && c.kind === 'active' && await acao('espera', { id: c.id, sim: !c.held }, 'A espera não funcionou')) { c.held = !c.held; renderLeft(); renderStrip() }
       break
-    case 'nova-conta': if (oculta()) break; novoForm(null); state.secao = 'contas'; if (state.view !== 'ajustes') go('ajustes'); else renderView(); { const i = document.querySelector('#fconta input'); if (i) i.focus() } break
+    case 'nova-conta': if (oculta() && !primeiraConta()) break; novoForm(null); state.secao = 'contas'; if (state.view !== 'ajustes') go('ajustes'); else renderView(); { const i = document.querySelector('#fconta input'); if (i) i.focus() } break
     case 'edita-conta': if (oculta()) break; novoForm(state.contas.find(x => x.id === v)); renderView(); break
     case 'form-cancela': state.form = null; renderView(); break
     case 'remove-conta': if (oculta()) break; state.form = null; state.remover = v; renderView(); break
@@ -1234,6 +1232,6 @@ async function abre () {
     state.versao = a.versao; state.atualizaSozinho = a.suportado
     if (a.pendente) recebeAtualizacao({ tipo: 'disponivel', release: a.pendente })
   } catch (e) { state.versao = '' }
-  if (!state.contas.length && !oculta()) { go('ajustes'); novoForm(null); renderView() } else go('chamadas')
+  if (!state.contas.length) { go('ajustes'); novoForm(null); renderView() } else go('chamadas')
 }
 abre()

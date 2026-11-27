@@ -92,6 +92,8 @@ O que está validado, o que falta e as decisões tomadas. Atualizar ao fim de ca
   trava, a conta parada se reconecta pelo próprio indicador (a tela Contas some). O completar roda depois da trava de
   instância única. Fica como está: mudar uma opção pela tela regrava o arquivo sem os comentários; com a trava, apagar
   gravações pelo histórico continua liberado (não foi pedido travar).
+- **Release 1.1.0** (pedido dele em 27/11, menor e não 1.0.1 porque traz função nova): os toques fortes, o
+  `ocultaConfig`, o status com não perturbe e a correção do registro que o offline do próprio ramal derrubava.
 - **Status e não perturbe** (pedido dele em 27/11): o indicador da conta, no alto, vira o botão do status. Abre
   "Disponível" e "Não perturbe", a conexão de cada conta (com o Reconectar quando ela parou) e o atalho para Contas
   (fora do `ocultaConfig`). No não perturbe, a ligação que chega é recusada como ocupado (486, o mesmo de quando já há

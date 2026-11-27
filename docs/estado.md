@@ -51,6 +51,37 @@ O que está validado, o que falta e as decisões tomadas. Atualizar ao fim de ca
   Ctrl+F, o inspetor) desligados pela tela, nos dois sistemas; nos campos de texto o menu de copiar e colar fica. O
   WebView2 tem uma opção própria para os atalhos, mas o Tauri não a expõe, e chamá-la direto pediria `unsafe`.
 
+### Mais decisões de 27/11
+
+- Na busca do teclado, **um clique no achado já liga**.
+- **Estado da conexão claro**: a sonda do PBX (OPTIONS a cada 30 s e, depois de uma sem resposta, de novo em 5 s;
+  `motor::Sonda`) diz se o PBX está lá e em quanto tempo responde. Na barra, a conta fica verde só com o nome
+  (passando o mouse, "o PBX respondeu em 12 ms, há 8 s"); sem resposta, âmbar com "· sem resposta" ou
+  "· reconectando" e "sem resposta desde HH:MM; tenta de novo sozinho a cada 30 s"; vermelho só quando o PBX recusa
+  (senha errada). O vigia da rede sobe a conta de novo quando o PBX some com ela registrada (fora de ligação; com
+  ligação, depois). O registro que fica sem resposta (o 408 que o rsipstack dá) conta como falta de rede: tenta de
+  novo a cada 30 s. Antes, ele ficava em "Falhou" até alguém clicar em Reconectar.
+- **Windows por último**: tudo se faz e se valida primeiro no Linux; o Windows vem quando o app do Linux estiver
+  pronto (ver "Backlog do Windows").
+- **Cancelamento de eco**: precisa de um motor bom (WebRTC AEC3 ou parecido); se ficar bom, ligado por padrão. Junto,
+  a opção de deixar a voz mais nítida (tirar ruído, como o Discord). Pesquisa em andamento.
+- **Próximas, nesta ordem**: mockup da tela (aviso de mensagem nova, presença dos ramais, excluir do histórico com
+  seleção de vários, editar o nome na lista de Ramais, a linha "Arquivos" do Sobre); transferência com um botão que
+  abre as duas opções, escritas por extenso, "Transferência direta" e "Transferência com consulta" (na com consulta,
+  ao desligar, transfere); durante uma ligação, mostrar a outra que chega (hoje é recusada com 486), que usa a mesma
+  base de duas ligações ao mesmo tempo da transferência com consulta; e a interface em inglês, escolhida pelo idioma
+  do sistema (português em `pt*`).
+
+## Backlog do Windows
+
+Só depois que o app do Linux estiver pronto. **Ao fazer e validar cada item no Windows, retirá-lo desta lista.**
+
+- [ ] Mudo do sistema ("Tirar do mudo" no aviso "Não te ouço"): no Windows não faz nada.
+- [ ] Pausar música e vídeo ao atender: no Windows não faz nada.
+- [ ] Gravação: o "Ouvir" no WebView2 e o "Abrir" da pasta.
+- [ ] Repetir no Windows o que foi validado no Linux desde 26/11 (atendida em outro ramal, gravação, sonda e
+  reconexão, menu e atalhos do navegador desligados).
+
 ## O PBX de teste
 
 Asterisk 13 com chan_sip, UDP 5060, sem TLS, realm `asterisk`. O servidor, os ramais e a senha ficam no `.env` da raiz,
@@ -160,10 +191,12 @@ aberto:
   preferências e a retenção caía nos 90 dias do padrão (agora cada campo vale sozinho, e a retenção só apaga com um
   prazo salvo e válido); arquivo com data de antes do app gravar (relógio atrasado) nunca vence; "Ouvir" não segue
   atalho nem abre FIFO; um atalho quebrado ocupa o nome de uma gravação nova; o nome só vale com data e hora possíveis.
-- [ ] No PBX: um grupo de ramais com o 4404 e outro aparelho, atendendo no outro. Pelo Asterisk, o `Reason` vem quando
-  o `Dial()` de vários ramais derruba os outros; numa fila, só com a opção `C` do `Queue()`.
-- [ ] Gravação numa ligação de verdade (as duas vozes, ouvir) e, no Windows, o "Ouvir" no WebView2 e o "Abrir" da
-  pasta.
+- [x] No PBX (27/11, por ele): atendida em outro ramal, com um grupo de ramais com o 4404 e outro aparelho.
+- [x] Gravação numa ligação de verdade (27/11, por ele): as duas vozes. O Windows está no backlog do Windows.
+- [x] Sonda e reconexão, sintético (27/11): a janela num KWin virtual contra um PBX falso que registra e responde ao
+  OPTIONS, e que se cala e volta. Caiu às 08:35:11, a tela mostrou "reconectando" às 08:35:50; voltou às 08:36:36 e
+  a conta registrou às 08:36:39, sozinha. No motor, `a_sonda_ve_o_pbx_cair_e_voltar`. A suspensão em si segue pelo
+  teste do relógio (`suspensao_e_o_relogio_da_parede_pulando`): ao acordar, a conta sobe de novo pelo mesmo caminho.
 
 ## Próximos passos
 

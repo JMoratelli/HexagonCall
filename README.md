@@ -18,12 +18,13 @@ O núcleo foi testado contra um PBX de verdade (Asterisk 13 com chan_sip), e a j
 | Presença dos ramais (SUBSCRIBE/NOTIFY, PIDF do chan_sip), com renovação | ok no PBX |
 | Ligação de saída: toque, atendimento, CANCEL, motivo do fim (480, 486…) | ok no PBX, atendida com áudio nos dois sentidos |
 | Ligação de entrada: toque (180), atender, recusar (486), quem ligou desistiu | ok no PBX, atendida com áudio nos dois sentidos |
-| Atendida em outro ramal: o grupo de ramais ou a fila que tocou aqui e outro atendeu não vira perdida (o `Reason` do CANCEL, RFC 3326) | nos testes locais e na janela, com o CANCEL do chan_sip; falta conferir no PBX |
-| Gravação das ligações em Opus (as duas vozes, uns 5 MB por hora), com retenção e "Ouvir" no histórico | nos testes locais e na janela |
+| Atendida em outro ramal: o grupo de ramais ou a fila que tocou aqui e outro atendeu não vira perdida (o `Reason` do CANCEL, RFC 3326) | ok no PBX |
+| Gravação das ligações em Opus (as duas vozes, uns 5 MB por hora), com retenção e "Ouvir" no histórico | ok no PBX |
 | Renegociação no meio da ligação (re-INVITE, UPDATE) e espera (hold) | ok no PBX (re-INVITE); espera nos testes locais |
 | Áudio: G.711 (PCMA e PCMU), RTP, RTP simétrico, jitter que se ajusta à rede (Wi-Fi) | ok no PBX |
 | Microfone e alto-falante (cpal: ALSA/PipeWire no Linux, WASAPI no Windows), da placa a 48 kHz para os 8 kHz do telefone | ok no PBX, com headset |
 | Sinal de vida (CRLF a cada 20 s) para o firewall não barrar os avisos do PBX | ok |
+| Sonda do PBX (OPTIONS a cada 30 s, como o qualify do Asterisk): o tempo de resposta na tela e, sem resposta, a conta sobe de novo sozinha | nos testes locais e na janela, com um PBX falso que cai e volta |
 | Várias contas no mesmo aparelho | na janela: cada conta é um `Ua` com porta própria |
 | Janela: cadastro de conta, discar, atender, mudo, espera, mensagens, últimas chamadas, bandeja, moldura própria | em uso no PBX |
 | Ligação chegando na notificação do sistema (Atender, Recusar), sons, aviso de microfone sem som | na janela |

@@ -368,7 +368,7 @@ checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
 name = "bancada"
-version = "1.1.1"
+version = "1.2.0"
 dependencies = [
  "clap",
  "motor",
@@ -2286,7 +2286,7 @@ checksum = "3bd1574e617a9a6c1f8f8181bd7e841e1f20e4277607ef28945765188d6284d4"
 
 [[package]]
 name = "janela"
-version = "1.1.1"
+version = "1.2.0"
 dependencies = [
  "dirs 7.0.0",
  "jiff 1.0.3",
@@ -2791,7 +2791,7 @@ dependencies = [
 
 [[package]]
 name = "motor"
-version = "1.1.1"
+version = "1.2.0"
 dependencies = [
  "hound",
  "nucleo",
@@ -2917,7 +2917,7 @@ dependencies = [
 
 [[package]]
 name = "nucleo"
-version = "1.1.1"
+version = "1.2.0"
 dependencies = [
  "serde",
  "thiserror 2.0.21",
@@ -4487,7 +4487,7 @@ dependencies = [
 
 [[package]]
 name = "som"
-version = "1.1.1"
+version = "1.2.0"
 dependencies = [
  "cpal",
  "motor",

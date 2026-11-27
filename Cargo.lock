@@ -2236,6 +2236,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "som",
+ "soup3",
  "tauri",
  "tauri-build",
  "tauri-plugin-autostart",

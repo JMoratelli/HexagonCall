@@ -11,6 +11,8 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+#[cfg(target_os = "linux")]
+mod atalho;
 mod atualizador;
 #[cfg(windows)]
 mod aumid;
@@ -365,16 +367,23 @@ async fn atualiza(app: AppHandle, t: Tel<'_>, a: State<'_, Atualizacao>) -> Resu
     };
     *a.pendente.lock().unwrap_or_else(PoisonError::into_inner) = Some(rel.clone());
     let quem_avisa = app.clone();
+    let quem_liga = Arc::clone(&t);
     let feito = tauri::async_runtime::spawn_blocking(move || {
         // Um aviso por ponto percentual, nao um por pedaco baixado.
         let ultimo = AtomicU32::new(u32::MAX);
-        atualizador::instala(&rel, &|fracao| {
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-            let pct = (fracao.clamp(0.0, 1.0) * 100.0) as u32;
-            if ultimo.swap(pct, Ordering::Relaxed) != pct {
-                avisa_atualizacao(&quem_avisa, AvisoAtualizacao::Baixando { fracao });
-            }
-        })
+        atualizador::instala(
+            &rel,
+            &|fracao| {
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                let pct = (fracao.clamp(0.0, 1.0) * 100.0) as u32;
+                if ultimo.swap(pct, Ordering::Relaxed) != pct {
+                    avisa_atualizacao(&quem_avisa, AvisoAtualizacao::Baixando { fracao });
+                }
+            },
+            // Uma ligacao que chegou durante o download: a saida do app a
+            // cortaria.
+            &|| !quem_liga.tem_chamada(),
+        )
     })
     .await
     .map_err(|e| e.to_string())
@@ -447,6 +456,8 @@ fn main() -> std::process::ExitCode {
                 .unwrap_or_else(|_| "warn,janela=info,motor=info,som=info,pulseaudio=off".into()),
         )
         .init();
+    // A versao no log: depois de uma atualizacao, diz qual abriu.
+    info!(versao = atualizador::versao_atual(), "abrindo");
     let guarda = match Guarda::abre() {
         Ok(g) => g,
         Err(e) => {
@@ -486,6 +497,8 @@ fn main() -> std::process::ExitCode {
                 }
             }
             vigia_atualizacao(app.handle().clone());
+            #[cfg(target_os = "linux")]
+            atalho::garante(flavor);
             bandeja(app, flavor)?;
             if let Some(w) = app.get_webview_window("principal") {
                 let _ = w.set_title(titulo(flavor));

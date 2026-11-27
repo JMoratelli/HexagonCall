@@ -26,6 +26,8 @@
   },
   "bundle": {
     "active": false,
+    "shortDescription": "Telefone SIP: ligações e mensagens pelo ramal",
+    "category": "Utility",
     "icon": [
       "icons/icon.png",
       "icons/icon.ico"

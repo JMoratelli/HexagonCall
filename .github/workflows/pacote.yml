@@ -1,12 +1,15 @@
 # Hexagon Call - Copyright (c) 2026 Jurandir Moratelli (@JJMoratelli).
 # O pacote para instalar (docs/estado.md, "Distribuicao e atualizacao"):
 #   - windows: o instalador HexagonCallSetup-X.Y.Z.exe (Inno Setup,
-#     pacote/instalador.iss), o HexagonCall.exe solto e o SHA256SUMS.txt;
-#   - (depois) linux: a AppImage.
-# A mao (Actions > Pacote > Run workflow): so o artefato do GitHub (14 dias).
+#     pacote/instalador.iss) e o HexagonCall.exe solto;
+#   - linux: a AppImage HexagonCall-X.Y.Z-x86_64.AppImage e o .zsync dela
+#     (pacote/linux.sh), feita no Ubuntu 22.04 para rodar do Debian 12 e do
+#     Ubuntu 22.04 em diante.
+# A mao (Actions > Pacote > Run workflow): so os artefatos do GitHub (14 dias).
 # Numa tag de versao (vX.Y.Z, igual a versao do Cargo.toml): publica a
-# release com os tres anexos, que e onde o atualizador do app procura
-# (janela/src/atualizador.rs: a lista de releases, nao a "latest").
+# release com os pacotes dos dois sistemas e um SHA256SUMS.txt com todos, que
+# e onde o atualizador do app procura (janela/src/atualizador.rs: a lista de
+# releases, nao a "latest").
 name: Pacote
 
 on:
@@ -21,11 +24,24 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  versao:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: A tag e a versao do Cargo.toml
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          versao="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
+          if [ "${GITHUB_REF_NAME}" != "v${versao}" ]; then
+            echo "a tag ${GITHUB_REF_NAME} nao bate com a versao ${versao} do Cargo.toml" >&2
+            exit 1
+          fi
+
   windows:
+    needs: versao
     runs-on: windows-2025
     timeout-minutes: 60
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@v7
 
@@ -35,16 +51,6 @@ jobs:
           versao="$(sed -n 's/^channel = "\(.*\)"/\1/p' rust-toolchain.toml)"
           rustup toolchain install "$versao" --profile minimal
           rustc --version
-
-      - name: A tag e a versao do Cargo.toml
-        if: startsWith(github.ref, 'refs/tags/')
-        shell: bash
-        run: |
-          versao="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
-          if [ "${GITHUB_REF_NAME}" != "v${versao}" ]; then
-            echo "a tag ${GITHUB_REF_NAME} nao bate com a versao ${versao} do Cargo.toml" >&2
-            exit 1
-          fi
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -67,12 +73,67 @@ jobs:
           path: pacote/saida/
           retention-days: 14
 
+  linux:
+    needs: versao
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Dependencias do sistema
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends pkg-config file zsync patchelf \
+            gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-pulseaudio \
+            libasound2-dev libpulse-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev
+
+      - name: Compilador do rust-toolchain.toml
+        run: |
+          versao="$(sed -n 's/^channel = "\(.*\)"/\1/p' rust-toolchain.toml)"
+          rustup toolchain install "$versao" --profile minimal
+          rustc --version
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: pacote
+
+      - name: Compila e empacota
+        run: ./pacote/linux.sh
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: HexagonCall-linux
+          path: pacote/saida/
+          retention-days: 14
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [windows, linux]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: pacotes
+
+      # Um SHA256SUMS.txt so, com as linhas dos dois sistemas: o atualizador
+      # acha a do pacote dele pelo nome.
+      - name: Junta os pacotes
+        run: |
+          mkdir release
+          for so in windows linux; do
+            cp "pacotes/HexagonCall-$so/"* release/
+            cat "pacotes/HexagonCall-$so/SHA256SUMS.txt" >> somas.txt
+          done
+          mv somas.txt release/SHA256SUMS.txt
+          (cd release && sha256sum -c SHA256SUMS.txt)
+          ls -l release
+
       - name: Publica a release
-        if: startsWith(github.ref, 'refs/tags/')
-        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "${GITHUB_REF_NAME}" pacote/saida/* \
+          gh release create "${GITHUB_REF_NAME}" release/* \
+            --repo "${GITHUB_REPOSITORY}" \
             --title "Hexagon Call ${GITHUB_REF_NAME#v}" \
             --generate-notes

@@ -29,7 +29,19 @@ O cache de compilação do hook fica em `~/.cache/hexagon-call-prepush`.
 
 ## Pacote
 
-`.github/workflows/pacote.yml`, à mão (Actions → Pacote) ou numa tag `vX.Y.Z`. Compila a janela em release no
-Windows e roda `pacote/windows.ps1`: o `HexagonCall.exe`, o instalador `HexagonCallSetup-X.Y.Z.exe` (Inno Setup,
-`pacote/instalador.iss`) e o `SHA256SUMS.txt`. À mão, fica só o artefato (14 dias). Na tag, que tem de ser igual à
-versão do `Cargo.toml`, publica a release com os três arquivos: é ali que o atualizador do app procura.
+`.github/workflows/pacote.yml`, à mão (Actions → Pacote) ou numa tag `vX.Y.Z`. Compila a janela em release nos dois
+sistemas, em paralelo:
+
+| Job | O que gera |
+|---|---|
+| `windows` | `pacote/windows.ps1`: o `HexagonCall.exe`, o instalador `HexagonCallSetup-X.Y.Z.exe` (Inno Setup, `pacote/instalador.iss`) e o `SHA256SUMS.txt` |
+| `linux` | `pacote/linux.sh`, num Ubuntu 22.04: a `HexagonCall-X.Y.Z-x86_64.AppImage`, o `.zsync` dela e o `SHA256SUMS.txt` |
+
+À mão, ficam só os artefatos (14 dias). Na tag, que tem de ser igual à versão do `Cargo.toml` (o job `versao`
+confere antes de compilar), o job `release` junta os pacotes dos dois, faz um `SHA256SUMS.txt` só com as linhas de
+todos e publica a release: é ali que o atualizador do app procura.
+
+A AppImage sai do Ubuntu 22.04 para rodar em qualquer sistema com a glibc dele ou mais nova (Debian 12, Ubuntu 22.04
+em diante). Ela leva o WebKitGTK e o GStreamer de lá (os sons da tela são WebAudio, que toca pelo GStreamer) e a
+informação de atualização do GitHub (`gh-releases-zsync`), que o Gear Lever e o AppImageLauncher usam para achar a
+versão nova pelo `.zsync`.

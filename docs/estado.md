@@ -23,7 +23,10 @@ O que está validado, o que falta e as decisões tomadas. Atualizar ao fim de ca
     plataforma;
   - baixa e confere o sha256 (pelo `SHA256SUMS.txt` da release);
   - instala por cima e reabre o app.
-  No Linux, o mesmo caminho com a AppImage: baixar, conferir e trocar o arquivo.
+  No Linux, o mesmo caminho com a AppImage: baixar, conferir e trocar o arquivo. A "loja" do Linux é a release do
+  GitHub (decisão de 26/11, em vez do Flathub): o app se atualiza sozinho de lá, e a AppImage leva a informação de
+  atualização do GitHub (`gh-releases-zsync`) para o Gear Lever e o AppImageLauncher acharem a versão nova. No
+  Discover e na Central do GNOME só entraria como Flatpak.
 - Base SIP: **rsipstack** (MIT), sem as features de TLS e WebSocket, que o PBX não usa. G.711, RTP, jitter, SDP e
   presença ficam no `nucleo`, nossos e testados.
 
@@ -89,6 +92,34 @@ fora do git (só na máquina de quem testa). Medido na bancada:
 - Na máquina de teste o WebView2 estava quebrado (atualização da Microsoft pela metade); o app abria só com o aviso em
   inglês do Tauri. Fica para o instalador: ele confere e oferece baixar o oficial.
 
+## Validado no Linux (26/11/2026, AppImage do Ubuntu 22.04 no CachyOS)
+
+A AppImage feita por `pacote/linux.sh` num contêiner Ubuntu 22.04 (o mesmo sistema do job `linux` do Pacote), rodada
+nesta máquina (CachyOS, KDE Wayland, RX 6600), sempre com D-Bus e pastas próprios, sem conta e sem encostar no app
+aberto:
+
+- [x] Abre e desenha certo no Wayland nativo, com a GPU e o Mesa daqui, e no Xwayland. Leva o TLS do GIO
+  (glib-networking) e o GStreamer com o plugin do PulseAudio (os sons da tela).
+- [x] Atalho no menu (`org.jj.HexagonCall.desktop` e o ícone) apontando para o arquivo da AppImage, com
+  `StartupWMClass=janela` (o binário dentro dela).
+- [x] Atualização de ponta a ponta num KWin virtual, com um servidor local no lugar da API do GitHub: a 0.1.0 achou a
+  0.1.1 em 30 s, baixou pelo libsoup, conferiu, trocou o arquivo e a 0.1.1 abriu sozinha em menos de 1 s (o Sobre
+  mostra 0.1.1, sem a faixa). A 0.1.0 fica no cache (um link, sem cópia) para voltar à mão. Depois da troca sobra só a
+  montagem da nova: a pasta e o fd 1023 que o runtime da AppImage deixa aberto prendiam a velha (e o arquivo velho, já
+  apagado) enquanto a nova rodasse. O shell que reabre fecha os dois.
+- [x] O mesmo com o app rodando como serviço do systemd (o "abrir com o sistema" do GNOME e do KDE): o serviço acaba
+  junto com a velha e levaria o shell que reabre; ele vai num escopo próprio (`systemd-run --scope`) e a 0.1.1 abre.
+  No Ubuntu 22.04 (systemd 249) era assim no abrir com o sistema; aqui foi simulado com um serviço `Type=exec`.
+- [x] Pasta da AppImage sem escrita: recusa antes de baixar, com o motivo na faixa. Hash errado: baixa, recusa, não
+  troca nada e não deixa o provisório no cache.
+- Revisão adversarial do atualizador (26/11), corrigido: `APPIMAGE` herdado de outra AppImage (um terminal de editor)
+  não vale mais (o binário tem de estar dentro do `APPDIR`); a limpeza do cache não apaga a AppImage que está rodando;
+  download comprimido no caminho não vira "parou no meio"; o provisório `.novo` é criado exclusivo (sem seguir link); o
+  atalho escapa `%` e reconhece o de outro gerenciador pelo caminho exato; e, nos dois sistemas, uma ligação que chega
+  durante o download faz a troca desistir em vez de ser cortada.
+- [ ] O som da tela (teclas, chamando) tocando de dentro da AppImage, e uma ligação de verdade por ela.
+- [ ] A AppImage do CI (o job `linux` do Pacote) e uma release de verdade no GitHub.
+
 ## Próximos passos
 
 1. Cancelamento de eco (webrtc-audio-processing, BSD), para quem usa caixa de som. Com headset já dá para usar.
@@ -129,5 +160,9 @@ fora do git (só na máquina de quem testa). Medido na bancada:
    do sistema e o pause ainda não fazem nada.
    Pacote do Windows (26/11): instalador `HexagonCallSetup-X.Y.Z.exe` (`pacote/`), publicado numa tag `vX.Y.Z` pelo
    workflow Pacote, e a atualização pelo motor do Acessos (`janela/src/atualizador.rs`; a rede pela pilha do Windows).
-   No Windows o toast da ligação usa o AUMID do app (`janela/src/aumid.rs`). Falta: a AppImage do Linux, com a
-   atualização.
+   No Windows o toast da ligação usa o AUMID do app (`janela/src/aumid.rs`).
+   Pacote do Linux (26/11): a AppImage `HexagonCall-X.Y.Z-x86_64.AppImage` (`pacote/linux.sh`, empacotada pelo CLI do
+   Tauri num Ubuntu 22.04), na mesma release do Windows, com um `SHA256SUMS.txt` só para os dois. A atualização é o
+   mesmo motor (rede pelo libsoup do WebKitGTK): a nova toma o lugar do arquivo da que está rodando e abre quando a
+   velha sai; a nova e a anterior ficam em `~/.cache/hexagon-call`. Rodando de uma AppImage, o app põe o próprio atalho
+   no menu (`janela/src/atalho.rs`), a menos que o Gear Lever ou o AppImageLauncher já tenham posto o deles.

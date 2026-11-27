@@ -68,6 +68,7 @@ const state = {
   call: null, panel: 'call', dial: '', dialT: '', dtmf: '', hseg: 'all', missedNew: 0,
   open: null, cq: '', drafts: {}, naoLidas: {},
   form: null, remover: null, devices: null, devErro: null, autostart: null,
+  grav: null, retencao: null, ouvindo: null,
   // A atualizacao: versao instalada, se este sistema atualiza sozinho, a release achada e a fase
   // (disponivel, baixando, instalando, erro). "Depois" esconde aquela versao por um dia.
   versao: '', atualizaSozinho: false, atu: null, atuDepois: null, procurando: false
@@ -76,6 +77,9 @@ const state = {
 // ---- Pequenos pedacos ----
 const fmt = s => { s = Math.max(0, s | 0); const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), x = String(s % 60).padStart(2, '0'); return h ? h + ':' + String(m).padStart(2, '0') + ':' + x : m + ':' + x }
 const hora = t => new Date(t * 1000).toTimeString().slice(0, 5)
+const plural = (n, um, varios) => n + ' ' + (n === 1 ? um : varios)
+const tamanho = b => b < 1e6 ? Math.max(1, Math.round(b / 1e3)) + ' KB' : (b / 1e6).toLocaleString('pt-BR', { maximumFractionDigits: b < 1e8 ? 1 : 0 }) + ' MB'
+const rotuloDias = d => d === 365 ? '1 ano' : d + ' dias'
 function dia (t) {
   const d = new Date(t * 1000), hoje = new Date()
   const zero = x => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime()
@@ -240,7 +244,7 @@ function callPanel (c) {
   if (c.kind === 'outgoing') {
     return '<div class="cp">' + who + '<span class="cp-state">' + ic('pout') + (c.tocando ? 'Tocando…' : 'Chamando…') + '</span></div><button type="button" class="hangbtn" data-act="hangup">' + ic('hang') + 'Cancelar</button>'
   }
-  const notas = (c.held ? ' · <b>em espera</b>' : '') + (c.deles ? ' · <b>' + esc(primeiro(d)) + ' pôs em espera</b>' : '') + (c.muted ? ' · <b>mudo</b>' : '')
+  const notas = (c.gravando ? ' · <b class="rec">gravando</b>' : '') + (c.held ? ' · <b>em espera</b>' : '') + (c.deles ? ' · <b>' + esc(primeiro(d)) + ' pôs em espera</b>' : '') + (c.muted ? ' · <b>mudo</b>' : '')
   const outra = (c.alternativas || [])[0]
   const trocar = '<button type="button" class="btn sm" data-act="pick" data-k="microfoneLigacao" data-pop aria-haspopup="dialog" aria-expanded="false" title="Microfone">' + (outra ? 'Outro' : 'Trocar') + '</button>'
   let alerta = ''
@@ -277,29 +281,35 @@ function incomingPanel (c) {
   return '<div class="cp ringing"><div class="cp-who">' + av(d, 'xl') + '<b>' + esc(d.n) + '</b><small>' + esc(c.r) + para + '</small></div><span class="cp-state">' + ic('pin') + 'Chamada recebida</span></div>' +
     '<div class="two"><button type="button" class="hangbtn" data-act="decline">' + ic('hang') + 'Recusar</button><button type="button" class="answerbtn" data-act="answer">' + ic('phone') + 'Atender</button></div>'
 }
-const perdida = h => h.entrada && !h.atendida
-// O texto do fim vem do nucleo (Fim::texto): "Ligação transferida" e o da transferencia que se completou.
+// O texto do fim vem do nucleo (Fim::texto): "Ligação transferida" e o da transferencia que se completou,
+// "Atendida em outro ramal" o de quando tocou aqui e em outros aparelhos (grupo, fila) e outro atendeu.
 const transferida = h => h.fim === 'Ligação transferida'
+const emOutroRamal = h => h.fim === 'Atendida em outro ramal'
+const perdida = h => h.entrada && !h.atendida && !emOutroRamal(h)
 function histTipo (h) {
   if (perdida(h)) return h.fim === 'Ligação recusada' ? 'Recusada' : 'Perdida'
+  if (emOutroRamal(h)) return 'Atendida em outro ramal'
   if (!h.atendida) return 'Não completada'
   if (transferida(h)) return 'Transferida'
   return h.entrada ? 'Recebida' : 'Feita'
 }
-const histIcone = h => perdida(h) ? ['pmiss', 'var(--crit)'] : h.entrada ? ['pin', 'var(--ok)'] : ['pout', 'var(--info)']
+const histIcone = h => perdida(h) ? ['pmiss', 'var(--crit)'] : emOutroRamal(h) ? ['pin', 'var(--warn)'] : h.entrada ? ['pin', 'var(--ok)'] : ['pout', 'var(--info)']
 function renderRecent () {
   const el = $('#recent'); if (!el) return
   const todas = [...state.hist].sort((x, y) => y.quando - x.quando)
   const missed = todas.filter(perdida).length
   const rows = todas.filter(h => state.hseg === 'all' || perdida(h))
   let grupo = '', body = ''
+  // Com alguma gravacao na lista, toda linha reserva o lugar do botao de ouvir: as horas ficam alinhadas.
+  const comOuvir = rows.slice(0, 200).some(h => h.gravacao)
   for (const h of rows.slice(0, 200)) {
     const g = dia(h.quando)
     if (g !== grupo) { grupo = g; body += '<div class="rgrp">' + esc(g) + '</div>' }
     const d = pessoa(h.ramal), [icon, c] = histIcone(h)
-    const sub = esc(h.ramal) + ' · <span class="k">' + histTipo(h) + '</span>' + (h.duracao ? ' · ' + fmt(h.duracao) : '') + (!h.atendida && !perdida(h) ? ' · ' + esc(h.fim) : '') + (state.contas.length > 1 ? ' · ' + (h.entrada ? 'para ' : 'pelo ') + esc(ramalDaConta(h.conta)) : '')
-    body += '<div class="hrow"><button type="button" class="hmain' + (perdida(h) ? ' missed' : '') + '" data-act="fill" data-v="' + esc(h.ramal) + '" title="Pôr ' + esc(h.ramal) + ' no campo">' +
+    const sub = esc(h.ramal) + ' · <span class="k">' + histTipo(h) + '</span>' + (h.duracao ? ' · ' + fmt(h.duracao) : '') + (!h.atendida && !perdida(h) && !emOutroRamal(h) ? ' · ' + esc(h.fim) : '') + (state.contas.length > 1 ? ' · ' + (h.entrada ? 'para ' : 'pelo ') + esc(ramalDaConta(h.conta)) : '')
+    body += '<div class="hrow"><button type="button" class="hmain' + (perdida(h) ? ' missed' : emOutroRamal(h) ? ' outro' : '') + '" data-act="fill" data-v="' + esc(h.ramal) + '" title="Pôr ' + esc(h.ramal) + ' no campo">' +
       '<span class="dir" style="--c:' + c + '">' + ic(icon) + '</span><span class="tx"><b>' + esc(d.n) + '</b><small>' + sub + '</small></span><span class="when">' + hora(h.quando) + '</span></button>' +
+      (h.gravacao ? '<button type="button" class="iconbtn sm" data-act="ouvir-gravacao" data-v="' + esc(h.gravacao) + '" aria-label="Ouvir a gravação com ' + esc(d.n) + '" title="Ouvir a gravação">' + ic('play') + '</button>' : comOuvir ? '<span class="iconbtn sm oco" aria-hidden="true"></span>' : '') +
       '<button type="button" class="iconbtn sm go" data-act="call" data-v="' + esc(h.ramal) + '" aria-label="Ligar para ' + esc(d.n) + '" title="Ligar">' + ic('phone') + '</button>' +
       '<button type="button" class="iconbtn sm" data-act="msg" data-v="' + esc(h.ramal) + '" aria-label="Mensagem para ' + esc(d.n) + '" title="Mensagem">' + ic('chat') + '</button></div>'
   }
@@ -471,7 +481,51 @@ function secAudio () {
       item('Testar o microfone', 'Fale alguma coisa: a barra mostra o que ele capta, por 10 segundos.', teste) +
       '<div id="teste-aviso"></div>' +
       item('Voz da ligação', 'Onde se ouve quem está do outro lado.', pick('altoFalante', 'Voz da ligação', devs && devs.altoFalantes)) +
-      item('Pausar música e vídeo', 'Ao atender, pausa o que estiver tocando; ao desligar, volta a tocar só o que foi pausado.', sw('pausarMusica', p.pausarMusica !== false, 'Pausar música e vídeo durante a ligação')))
+      item('Pausar música e vídeo', 'Ao atender, pausa o que estiver tocando; ao desligar, volta a tocar só o que foi pausado.', sw('pausarMusica', p.pausarMusica !== false, 'Pausar música e vídeo durante a ligação'))) +
+    secGravacao()
+}
+function secGravacao () {
+  const p = state.prefs, g = state.grav, r = state.retencao
+  const dias = p.guardarGravacoes == null ? 90 : p.guardarGravacoes
+  const resumo = !g ? '…' : g.quantidade ? plural(g.quantidade, 'gravação', 'gravações') + ' · ' + tamanho(g.bytes) : 'Nenhuma gravação ainda.'
+  // Diminuir a retencao apaga na hora o que passou dela: so depois do "Apagar".
+  const confirma = r
+    ? '<div class="confirma" role="alert"><span>Guardar por ' + rotuloDias(r.dias) + ' apaga agora <b>' + plural(r.n, 'gravação', 'gravações') + '</b> com mais tempo que isso.</span>' +
+      '<button type="button" class="btn" data-act="retencao-cancela">Cancelar</button><button type="button" class="btn perigo" data-act="retencao-confirma">Apagar</button></div>'
+    : ''
+  return grupo('Gravação',
+    item('Gravar as ligações', 'As duas vozes de cada ligação atendida, em Opus: uns 5 MB por hora de conversa.', sw('gravar', p.gravar, 'Gravar as ligações')) +
+    item('Guardar por', 'As mais antigas se apagam sozinhas.', msegHTML('retencao', String(r ? r.dias : dias), [['7', '7 dias'], ['30', '30 dias'], ['90', '90 dias'], ['365', '1 ano'], ['0', 'Sempre']], 'Guardar as gravações por')) + confirma +
+    item('Pasta', (g ? '<span class="mono">' + esc(g.pasta) + '</span><br>' : '') + resumo, '<button type="button" class="btn sm" data-act="abre-gravacoes">Abrir</button>'))
+}
+async function carregaGravacoes () {
+  try { state.grav = await invoke('gravacoes') } catch (e) { state.grav = null; return }
+  if (state.view === 'ajustes' && state.secao === 'audio') renderView()
+}
+// O tocador fica fora do que se redesenha (o historico), para nao recomecar a cada aviso.
+async function ouveGravacao (arquivo) {
+  if (state.call) { toast('Durante a ligação, não.'); return }
+  let bytes
+  try { bytes = await invoke('ouve_gravacao', { arquivo }) } catch (e) { toast('Não abri a gravação: ' + erroDe(e)); return }
+  fechaGravacao()
+  const h = state.hist.find(x => x.gravacao === arquivo)
+  const d = h ? pessoa(h.ramal) : null
+  // No Windows os bytes chegam num ArrayBuffer; no Linux o IPC do WebKit (postMessage) manda uma lista de numeros.
+  const dados = bytes instanceof ArrayBuffer ? bytes : Uint8Array.from(bytes)
+  const url = URL.createObjectURL(new Blob([dados], { type: 'audio/ogg; codecs=opus' }))
+  state.ouvindo = { arquivo, url }
+  const el = $('#ouvindo')
+  el.innerHTML = ic('play') + '<div class="tx"><b>' + (d ? esc(d.n) : 'Gravação') + '</b>' + (h ? '<span>' + (h.entrada ? 'Recebida' : 'Feita') + ' · ' + esc(dia(h.quando)) + ', ' + hora(h.quando) + '</span>' : '') + '</div>' +
+    '<audio controls autoplay src="' + url + '"></audio>' +
+    '<button type="button" class="iconbtn sm ghost" data-act="ouvir-fecha" aria-label="Fechar a gravação" title="Fechar">' + ic('x') + '</button>'
+  el.hidden = false
+}
+function fechaGravacao () {
+  const el = $('#ouvindo'), a = el.querySelector('audio')
+  if (a) a.pause()
+  el.hidden = true; el.innerHTML = ''
+  if (state.ouvindo) URL.revokeObjectURL(state.ouvindo.url)
+  state.ouvindo = null
 }
 function secToques () {
   const p = state.prefs, vol = p.volumeToque == null ? 50 : p.volumeToque
@@ -619,7 +673,7 @@ function aplica (e) {
   state.hist = e.historico; state.convs = e.conversas; state.toques = e.toques || []
   if (e.chamada && !state.call) {
     const c = e.chamada
-    state.call = { id: c.id, kind: c.atendida ? 'active' : c.entrada ? 'incoming' : 'outgoing', r: c.ramal, t0: c.desde * 1000 }
+    state.call = { id: c.id, kind: c.atendida ? 'active' : c.entrada ? 'incoming' : 'outgoing', r: c.ramal, t0: c.desde * 1000, gravando: c.gravando }
     if (c.nome) state.nomes[c.ramal] = c.nome
   }
 }
@@ -632,6 +686,7 @@ function recebe (a) {
       break
     case 'recebendo':
       if (a.nome) state.nomes[a.ramal] = a.nome
+      { const ouvindo = $('#ouvindo audio'); if (ouvindo) ouvindo.pause() }
       state.call = { id: a.id, kind: 'incoming', r: a.ramal, conta: a.conta }
       state.panel = 'call' // o toque, o telefone toca (no alto-falante escolhido ou em todos)
       if (state.view === 'chamadas') renderLeft(); renderStrip()
@@ -642,7 +697,7 @@ function recebe (a) {
     case 'atendida':
       if (daChamada(a.id) || (state.call && !state.call.id && state.call.kind === 'outgoing')) {
         paraSom()
-        Object.assign(state.call, { id: a.id, kind: 'active', t0: Date.now(), codec: a.codec })
+        Object.assign(state.call, { id: a.id, kind: 'active', t0: Date.now(), codec: a.codec, gravando: a.gravando })
         if (state.view === 'chamadas') renderLeft(); renderStrip()
       }
       break
@@ -673,7 +728,7 @@ function recebe (a) {
       if (daChamada(a.id)) { const era = state.call.kind; paraSom(); state.call = null; if (era !== 'incoming') SONS.fim() }
       const d = pessoa(a.item.ramal)
       if (perdida(a.item) && state.view !== 'chamadas') state.missedNew++
-      toast(perdida(a.item) ? 'Ligação perdida de ' + d.n + '.' : transferida(a.item) ? 'Ligação transferida · ' + fmt(a.item.duracao) : a.item.atendida ? 'Ligação encerrada · ' + fmt(a.item.duracao) : a.item.fim)
+      toast(perdida(a.item) ? 'Ligação perdida de ' + d.n + '.' : emOutroRamal(a.item) ? 'Ligação de ' + d.n + ' atendida em outro ramal.' : transferida(a.item) ? 'Ligação transferida · ' + fmt(a.item.duracao) : a.item.atendida ? 'Ligação encerrada · ' + fmt(a.item.duracao) : a.item.fim)
       refresh()
       break
     }
@@ -780,6 +835,7 @@ function go (v) {
   state.view = VIEWS.includes(v) ? v : 'chamadas'
   closePop()
   if (state.view === 'ajustes' && !state.devices) carregaDispositivos()
+  if (state.view === 'ajustes') carregaGravacoes()
   if (state.view === 'ajustes' && state.autostart == null) invoke('abrir_com_o_sistema', { sim: null }).then(v => { state.autostart = v; if (state.view === 'ajustes') renderView() }).catch(() => {})
   refresh()
 }
@@ -877,7 +933,29 @@ document.addEventListener('click', async e => {
     case 'atualiza-agora': await atualizaAgora(); break
     case 'atualiza-depois': if (state.atu) state.atuDepois = { tag: state.atu.rel.tag, quando: Date.now() }; state.atu = null; renderAtualiza(); break
     case 'procura-atualizacao': await procuraAtualizacao(); break
-    case 'secao': state.secao = v; closePop(); renderView(); { const pane = $('#cfgpane'); if (pane) pane.scrollTop = 0 } break
+    case 'secao': state.secao = v; state.retencao = null; closePop(); renderView(); { const pane = $('#cfgpane'); if (pane) pane.scrollTop = 0 } if (v === 'audio') carregaGravacoes(); break
+    case 'retencao': {
+      const dias = Number(v), atual = state.prefs.guardarGravacoes == null ? 90 : state.prefs.guardarGravacoes
+      if (dias === atual && !state.retencao) break
+      state.retencao = null
+      // Qualquer retencao que apague gravacao agora pede o "Apagar" antes de valer.
+      let n = 0
+      if (dias > 0) { try { n = await invoke('gravacoes_mais_velhas', { dias }) } catch (err) { toast('Não conferi as gravações: ' + erroDe(err)); renderView(); break } }
+      if (n > 0) { state.retencao = { dias, n }; renderView(); break }
+      state.prefs.guardarGravacoes = dias; await salvaPrefs(); renderView(); break
+    }
+    case 'retencao-cancela': state.retencao = null; renderView(); break
+    case 'retencao-confirma': {
+      const r = state.retencao; if (!r) break
+      state.retencao = null
+      state.prefs.guardarGravacoes = r.dias
+      await salvaPrefs()
+      try { const n = await invoke('aplica_retencao'); toast(n ? plural(n, 'gravação apagada', 'gravações apagadas') + '.' : 'Nenhuma gravação apagada.') } catch (err) { toast('Não apaguei: ' + erroDe(err)) }
+      await carregaGravacoes(); renderView(); break
+    }
+    case 'abre-gravacoes': try { await invoke('abre_pasta_gravacoes') } catch (err) { toast('Não abri a pasta: ' + erroDe(err)) } break
+    case 'ouvir-gravacao': await ouveGravacao(v); break
+    case 'ouvir-fecha': fechaGravacao(); break
     case 'ouvir-toque':
       if (state.call) { toast('Durante a ligação, não.'); break }
       b.disabled = true

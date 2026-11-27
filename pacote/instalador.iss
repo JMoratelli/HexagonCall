@@ -96,9 +96,12 @@ Filename: "{app}\HexagonCall.exe"; Description: "Abrir o Hexagon Call agora"; Fl
 Filename: "{app}\HexagonCall.exe"; Flags: nowait skipifnotsilent
 
 [UninstallDelete]
-; O icone que o app grava para as notificacoes. Contas, historico e conversas
-; (%APPDATA%\hexagon-call) ficam: sao do usuario, e reinstalar os encontra.
-Type: filesandordirs; Name: "{localappdata}\hexagon-call"
+; Os icones que o app grava para as notificacoes, e a pasta so se ficar vazia:
+; as gravacoes das ligacoes moram nela (gravacoes\). Contas, historico e
+; conversas (%APPDATA%\hexagon-call) tambem ficam: sao do usuario, e
+; reinstalar os encontra.
+Type: files; Name: "{localappdata}\hexagon-call\*.png"
+Type: dirifempty; Name: "{localappdata}\hexagon-call"
 
 [Code]
 // ---------------------------------------------------------------------

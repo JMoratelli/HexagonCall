@@ -16,6 +16,7 @@ mod atalho;
 mod atualizador;
 #[cfg(windows)]
 mod aumid;
+mod gravacao;
 mod guarda;
 mod musica;
 mod notificacao;
@@ -186,6 +187,38 @@ fn salva_preferencias(app: AppHandle, t: Tel<'_>, mut p: Preferencias) -> Result
         let _ = w.set_title(titulo(p.flavor));
     }
     Ok(())
+}
+
+#[tauri::command]
+fn gravacoes(t: Tel<'_>) -> Result<gravacao::Resumo, String> {
+    Ok(t.gravacoes()?.resumo())
+}
+
+/// Quantas gravacoes uma retencao de `dias` apagaria: a tela confirma antes.
+#[tauri::command]
+fn gravacoes_mais_velhas(t: Tel<'_>, dias: u32) -> Result<usize, String> {
+    Ok(t.gravacoes()?.mais_velhas(dias))
+}
+
+/// Aplica agora a retencao que esta salva (depois da confirmacao na tela).
+#[tauri::command]
+fn aplica_retencao(t: Tel<'_>) -> Result<usize, String> {
+    let dias = t
+        .guarda()
+        .retencao_salva()
+        .ok_or("as preferências salvas não abriram: nada foi apagado")?;
+    Ok(t.gravacoes()?.aplica_retencao(dias))
+}
+
+/// O arquivo da gravacao, em bytes, para a tela tocar.
+#[tauri::command]
+async fn ouve_gravacao(t: Tel<'_>, arquivo: String) -> Result<tauri::ipc::Response, String> {
+    Ok(tauri::ipc::Response::new(t.gravacoes()?.le(&arquivo)?))
+}
+
+#[tauri::command]
+fn abre_pasta_gravacoes(t: Tel<'_>) -> Result<(), String> {
+    t.gravacoes()?.mostra_pasta()
 }
 
 #[derive(Serialize)]
@@ -541,6 +574,11 @@ fn main() -> std::process::ExitCode {
             remove_conta,
             reconecta,
             salva_preferencias,
+            gravacoes,
+            gravacoes_mais_velhas,
+            aplica_retencao,
+            ouve_gravacao,
+            abre_pasta_gravacoes,
             dispositivos,
             atualizacao,
             procura_atualizacao,

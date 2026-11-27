@@ -7,10 +7,10 @@
 //! maquina barra os avisos do PBX depois de 2 minutos (bancada de 26/11/2026).
 
 use crate::erro::Erro;
-use crate::midia::{Destino, Envio, Estatistica, Fonte, Sessao};
+use crate::midia::{Destino, Envio, Estatistica, Fonte, Gravador, Sessao};
 use crate::rede;
 use nucleo::conta::Conta;
-use nucleo::ligacao::{Fim, codigo_do_sipfrag, fim_por_status};
+use nucleo::ligacao::{Fim, atendida_em_outro_lugar, codigo_do_sipfrag, fim_por_status};
 use nucleo::presenca::{self, Presenca};
 use nucleo::sdp::{self, Codec, Direcao, Local, NOSSOS_CODECS, Remota, TIPO_DTMF};
 use rsipstack::EndpointBuilder;
@@ -26,12 +26,12 @@ use rsipstack::sip::prelude::*;
 use rsipstack::sip::{
     self as sip, Header, Method, Request, Response, SipMessage, StatusCode, StatusCodeKind, Uri,
 };
-use rsipstack::transaction::endpoint::{EndpointInnerRef, EndpointOption};
+use rsipstack::transaction::endpoint::{EndpointInnerRef, EndpointOption, MessageInspector};
 use rsipstack::transaction::key::{TransactionKey, TransactionRole};
 use rsipstack::transaction::{Endpoint, Transaction, TransactionReceiver, make_tag};
 use rsipstack::transport::udp::UdpConnection;
 use rsipstack::transport::{SipAddr, TransportLayer};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -233,6 +233,38 @@ pub struct Ua {
     assinaturas: Mutex<HashMap<String, Assinatura>>,
     cseq: AtomicU32,
     registrado: AtomicBool,
+    /// Call-IDs das ligacoes chegando que outro aparelho atendeu (Inspetor).
+    em_outro: Arc<Mutex<HashSet<String>>>,
+}
+
+/// Olha o que chega antes das transacoes. O rsipstack responde ao CANCEL de
+/// uma ligacao chegando sozinho, e o dialogo so diz que cancelaram: o Reason
+/// que conta que outro aparelho atendeu (grupo de ramais, fila) e lido aqui e
+/// fica guardado pelo Call-ID ate a ligacao acabar.
+struct Inspetor {
+    em_outro: Arc<Mutex<HashSet<String>>>,
+}
+
+impl MessageInspector for Inspetor {
+    fn before_send(&self, msg: SipMessage, _: Option<&SipAddr>) -> SipMessage {
+        msg
+    }
+
+    fn after_received(&self, msg: SipMessage, _: Option<&SipAddr>) -> SipMessage {
+        if let SipMessage::Request(req) = &msg
+            && req.method == Method::Cancel
+            && valores_de(&req.headers, "Reason").any(|v| atendida_em_outro_lugar(&v))
+            && let Ok(call_id) = req.call_id_header()
+        {
+            let mut em_outro = trava(&self.em_outro);
+            // CANCEL de ligacao que nunca chegou aqui nao sai mais: nao cresce.
+            if em_outro.len() >= 64 {
+                em_outro.clear();
+            }
+            em_outro.insert(call_id.value().to_string());
+        }
+        msg
+    }
 }
 
 /// Um Mutex envenenado (panico com ele travado) segue utilizavel: o estado
@@ -244,7 +276,15 @@ fn trava<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 /// O valor de um cabecalho pelo nome, sem depender de a biblioteca ter tipo
 /// para ele (Subscription-State, Expires).
 fn valor_de(cabecalhos: &sip::Headers, nome: &str) -> Option<String> {
-    cabecalhos.iter().find_map(|h| {
+    valores_de(cabecalhos, nome).next()
+}
+
+/// Todos os valores de um cabecalho que pode vir repetido.
+fn valores_de<'a>(
+    cabecalhos: &'a sip::Headers,
+    nome: &'a str,
+) -> impl Iterator<Item = String> + 'a {
+    cabecalhos.iter().filter_map(move |h| {
         let texto = h.to_string();
         let (n, v) = texto.split_once(':')?;
         n.trim()
@@ -337,11 +377,16 @@ impl Ua {
             callid_suffix: Some(ip.to_string()),
             ..Default::default()
         };
+        let em_outro = Arc::new(Mutex::new(HashSet::new()));
+        let inspetor = Inspetor {
+            em_outro: Arc::clone(&em_outro),
+        };
         let endpoint = EndpointBuilder::new()
             .with_option(opcao)
             .with_cancel_token(cancela.clone())
             .with_transport_layer(transporte)
             .with_user_agent(AGENTE)
+            .with_inspector(Box::new(inspetor))
             .build();
         let entrada = endpoint.incoming_transactions()?;
         let dialogos = Arc::new(DialogLayer::new(endpoint.inner.clone()));
@@ -387,6 +432,7 @@ impl Ua {
             assinaturas: Mutex::new(HashMap::new()),
             cseq: AtomicU32::new(rand::random::<u32>() % 10_000 + 1),
             registrado: AtomicBool::new(false),
+            em_outro,
             conta,
         });
 
@@ -915,6 +961,19 @@ impl Ua {
         Ok(())
     }
 
+    /// Grava a ligacao atendida (`Some`) ou para de gravar (`None`).
+    pub fn grava(&self, id: &str, gravador: Option<Box<dyn Gravador>>) -> Result<(), Erro> {
+        let ligacoes = trava(&self.ligacoes);
+        let sessao = ligacoes
+            .get(id)
+            .ok_or_else(|| Erro::SemLigacao(id.to_string()))?
+            .sessao
+            .as_ref()
+            .ok_or_else(|| Erro::EstadoErrado(id.to_string()))?;
+        sessao.grava(gravador);
+        Ok(())
+    }
+
     /// Desliga: BYE se atendida, CANCEL se ainda tocando do outro lado,
     /// recusa (486) se for uma ligacao chegando.
     pub async fn desliga(&self, id: &str) -> Result<(), Erro> {
@@ -1185,7 +1244,8 @@ impl Ua {
         });
     }
 
-    fn fim_pelo_dialogo(l: &Ligacao, motivo: &TerminatedReason) -> Option<Fim> {
+    /// `em_outro`: o CANCEL disse que outro aparelho atendeu (Inspetor).
+    fn fim_pelo_dialogo(l: &Ligacao, motivo: &TerminatedReason, em_outro: bool) -> Option<Fim> {
         if l.transferida {
             return Some(Fim::Transferida);
         }
@@ -1206,6 +1266,7 @@ impl Ua {
             return None;
         }
         Some(match motivo {
+            TerminatedReason::UacCancel if em_outro => Fim::AtendidaEmOutro,
             TerminatedReason::UacCancel => Fim::Perdida,
             TerminatedReason::Timeout => Fim::Perdida,
             TerminatedReason::UacOther(c) | TerminatedReason::UasOther(c) => {
@@ -1245,9 +1306,10 @@ impl Ua {
                 }
             }
             DialogState::Terminated(id, motivo) => {
+                let em_outro = trava(&self.em_outro).remove(&id.call_id);
                 let fim = trava(&self.ligacoes)
                     .get(&id.call_id)
-                    .and_then(|l| Self::fim_pelo_dialogo(l, &motivo));
+                    .and_then(|l| Self::fim_pelo_dialogo(l, &motivo, em_outro));
                 self.dialogos.remove_dialog(&id);
                 if let Some(fim) = fim {
                     self.encerra_ligacao(&id.call_id, fim).await;

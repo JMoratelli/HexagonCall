@@ -10,6 +10,10 @@ publish = false
 [dependencies]
 cpal = { version = "0.18.2", features = ["pulseaudio"] }
 motor = { path = "../motor" }
+# A gravacao das ligacoes: Opus em Rust puro (o libopus 1.6 portado, sem C
+# para compilar no Windows nem na AppImage) dentro de um arquivo Ogg.
+ogg = "0.9.2"
+opus-rs = "0.1.42"
 rtrb = "0.4.1"
 rubato = "5.1.0"
 thiserror = "2.0.21"

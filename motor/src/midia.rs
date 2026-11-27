@@ -38,6 +38,14 @@ pub trait Destino: Send + 'static {
     fn fim(&mut self) {}
 }
 
+/// Recebe a ligacao como ela aconteceu, a cada 20 ms: o que foi para o outro
+/// lado (ja com o mudo e a espera) e o que tocou aqui. E a gravacao.
+pub trait Gravador: Send + 'static {
+    fn quadro(&mut self, nosso: &Quadro, deles: &Quadro);
+    /// Chamado uma vez, quando a gravacao para ou a ligacao acaba.
+    fn fim(&mut self) {}
+}
+
 pub struct Silencio;
 
 impl Fonte for Silencio {
@@ -235,6 +243,8 @@ struct Rumo {
 type FonteNova = Arc<std::sync::Mutex<Option<Box<dyn Fonte>>>>;
 /// Os tons do teclado (eventos da RFC 4733) esperando a vez.
 type Tons = Arc<std::sync::Mutex<std::collections::VecDeque<u8>>>;
+/// A gravacao, que comeca e para no meio da ligacao.
+type Gravacao = Arc<std::sync::Mutex<Option<Box<dyn Gravador>>>>;
 
 /// O que a ligacao muda de fora no laco do audio.
 #[derive(Clone)]
@@ -243,6 +253,7 @@ struct Controles {
     mudo: Arc<AtomicBool>,
     fonte_nova: FonteNova,
     tons: Tons,
+    gravacao: Gravacao,
 }
 
 pub struct Sessao {
@@ -283,6 +294,7 @@ impl Sessao {
             mudo: Arc::new(AtomicBool::new(false)),
             fonte_nova: Arc::default(),
             tons: Arc::default(),
+            gravacao: Arc::default(),
         };
         let tarefa = tokio::spawn(laco(
             socket,
@@ -317,6 +329,18 @@ impl Sessao {
     pub fn troca_fonte(&self, fonte: Box<dyn Fonte>) {
         if let Ok(mut f) = self.controles.fonte_nova.lock() {
             *f = Some(fonte);
+        }
+    }
+
+    /// Comeca a gravar (`Some`) ou para (`None`); a gravacao de antes, se
+    /// havia, e fechada.
+    pub fn grava(&self, gravador: Option<Box<dyn Gravador>>) {
+        let antiga = match self.controles.gravacao.lock() {
+            Ok(mut g) => std::mem::replace(&mut *g, gravador),
+            Err(_) => return,
+        };
+        if let Some(mut g) = antiga {
+            g.fim();
         }
     }
 
@@ -376,6 +400,7 @@ async fn laco(
         mudo,
         fonte_nova,
         tons,
+        gravacao,
     } = controles;
     let mut tom: Option<TomEmCurso> = None;
     let mut pausa: u16 = 0;
@@ -487,7 +512,13 @@ async fn laco(
                 cabecalho.carimbo = cabecalho.carimbo.wrapping_add(160);
                 let tocado = jitter.retira().unwrap_or(SILENCIO);
                 // Quem pos em espera nao ouve o outro lado.
-                destino.escreve(if envio == Envio::Silencio { &SILENCIO } else { &tocado });
+                let ouvido = if envio == Envio::Silencio { &SILENCIO } else { &tocado };
+                destino.escreve(ouvido);
+                if let Ok(mut g) = gravacao.lock()
+                    && let Some(g) = g.as_mut()
+                {
+                    g.quadro(&quadro, ouvido);
+                }
             }
             recebido = socket.recv_from(&mut entrada) => {
                 let Ok((n, de)) = recebido else { continue };
@@ -511,6 +542,9 @@ async fn laco(
         }
     }
     destino.fim();
+    if let Some(mut g) = gravacao.lock().ok().and_then(|mut g| g.take()) {
+        g.fim();
+    }
     estatistica.jitter = jitter.contagem();
     (estatistica.variacao_ms, estatistica.variacao_pior_ms) = variacao.ms(TAXA);
     estatistica

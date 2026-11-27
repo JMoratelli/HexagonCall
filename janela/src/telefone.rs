@@ -6,6 +6,7 @@
 //! Uma ligacao por vez, como no prototipo: chegando outra durante uma
 //! ligacao, ela e recusada (486) e entra no historico como perdida.
 
+use crate::gravacao::Gravacoes;
 use crate::guarda::{Guarda, ItemConversa, ItemHistorico, OndeASenha, Preferencias, agora};
 use crate::musica::Musica;
 use crate::notificacao::Notificacoes;
@@ -55,6 +56,8 @@ pub struct Telefone {
     testando: std::sync::atomic::AtomicBool,
     /// O que a ligacao pausou (musica, video), para retomar ao desligar.
     musica: Musica,
+    /// A pasta das gravacoes; None num sistema sem pasta de dados.
+    gravacoes: Option<Gravacoes>,
 }
 
 struct Linha {
@@ -92,6 +95,8 @@ struct Chamada {
     espera: bool,
     /// Microfone ou alto-falante que nao abriu nesta ligacao.
     faltando: Faltando,
+    /// O arquivo da gravacao, se esta gravando.
+    gravacao: Option<String>,
 }
 
 /// Uma conta como a tela mostra.
@@ -121,6 +126,7 @@ pub struct ChamadaVista {
     pub nome: Option<String>,
     pub atendida: bool,
     pub desde: u64,
+    pub gravando: bool,
 }
 
 /// Outra entrada que esta captando som, para a tela sugerir.
@@ -169,6 +175,7 @@ pub enum Aviso {
     Atendida {
         id: String,
         codec: String,
+        gravando: bool,
     },
     Espera {
         id: String,
@@ -245,6 +252,7 @@ impl Telefone {
             tocador: Mutex::new(None),
             testando: std::sync::atomic::AtomicBool::new(false),
             musica: Musica::default(),
+            gravacoes: Gravacoes::abre().map_err(|e| warn!("gravacoes: {e}")).ok(),
         })
     }
 
@@ -252,10 +260,66 @@ impl Telefone {
         &self.guarda
     }
 
+    pub fn gravacoes(&self) -> Result<&Gravacoes, String> {
+        self.gravacoes
+            .as_ref()
+            .ok_or_else(|| "sem pasta para as gravações neste sistema".into())
+    }
+
+    /// Apaga as gravacoes mais velhas que a retencao escolhida (ao abrir e a
+    /// cada 6 horas). Diminuir a retencao na tela pede confirmacao antes.
+    async fn vigia_gravacoes(self: Arc<Self>) {
+        loop {
+            match (self.gravacoes.as_ref(), self.guarda.retencao_salva()) {
+                (Some(g), Some(dias)) => {
+                    g.aplica_retencao(dias);
+                }
+                (Some(_), None) => {
+                    warn!("retencao das gravacoes parada: preferencias.toml nao abre ou nao vale");
+                }
+                (None, _) => {}
+            }
+            tokio::time::sleep(Duration::from_secs(6 * 3600)).await;
+        }
+    }
+
+    /// Comeca a gravar a ligacao que acabou de ser atendida.
+    fn comeca_gravacao(&self, id: &str) -> bool {
+        let Some((inicio, entrada, ramal, nome)) = trava(&self.chamadas)
+            .get(id)
+            .map(|c| (c.inicio, c.entrada, c.ramal.clone(), c.nome.clone()))
+        else {
+            return false;
+        };
+        let resultado = self.gravacoes().and_then(|g| {
+            let (arquivo, gravacao) = g.nova(inicio, entrada, &ramal, nome.as_deref())?;
+            self.ua_da_chamada(id)?
+                .grava(id, Some(Box::new(gravacao)))
+                .map_err(|e| e.to_string())?;
+            Ok(arquivo)
+        });
+        match resultado {
+            Ok(arquivo) => {
+                info!(%id, %arquivo, "gravando");
+                if let Some(c) = trava(&self.chamadas).get_mut(id) {
+                    c.gravacao = Some(arquivo);
+                }
+                true
+            }
+            Err(e) => {
+                warn!(%id, "a gravacao nao comecou: {e}");
+                self.avisa_erro(format!("A gravação não começou: {e}"));
+                false
+            }
+        }
+    }
+
     /// Le as contas do disco, liga cada uma e fica vigiando a rede.
     pub async fn comeca(self: &Arc<Self>) {
         let tel = Arc::clone(self);
         tauri::async_runtime::spawn(async move { tel.vigia_rede().await });
+        let tel = Arc::clone(self);
+        tauri::async_runtime::spawn(async move { tel.vigia_gravacoes().await });
         let contas = match self.guarda.contas() {
             Ok(c) => c,
             Err(e) => {
@@ -319,6 +383,20 @@ impl Telefone {
             .collect()
     }
 
+    /// O historico, sem a gravacao que a retencao ja apagou.
+    fn historico(&self) -> Vec<ItemHistorico> {
+        let mut h = self.guarda.historico();
+        for i in &mut h {
+            if i.gravacao
+                .as_deref()
+                .is_some_and(|a| !self.gravacoes.as_ref().is_some_and(|g| g.existe(a)))
+            {
+                i.gravacao = None;
+            }
+        }
+        h
+    }
+
     pub fn estado(&self) -> Estado {
         let chamada = trava(&self.chamadas)
             .iter()
@@ -331,11 +409,12 @@ impl Telefone {
                 nome: c.nome.clone(),
                 atendida: c.atendida,
                 desde: c.atendida_em.unwrap_or(c.inicio),
+                gravando: c.gravacao.is_some(),
             });
         Estado {
             contas: self.contas_vistas(),
             chamada,
-            historico: self.guarda.historico(),
+            historico: self.historico(),
             conversas: self.guarda.conversas(),
             preferencias: self.guarda.preferencias(),
             tem_chaveiro: Guarda::tem_chaveiro(),
@@ -553,6 +632,7 @@ impl Telefone {
                         c.atendida = true;
                         c.atendida_em = Some(agora());
                     }
+                    let gravando = self.guarda.preferencias().gravar && self.comeca_gravacao(&id);
                     let tel = Arc::clone(&self);
                     let vigiada = id.clone();
                     tauri::async_runtime::spawn(async move { tel.vigia_microfone(vigiada).await });
@@ -563,6 +643,7 @@ impl Telefone {
                     self.avisa(Aviso::Atendida {
                         id: id.clone(),
                         codec: codec.nome().to_string(),
+                        gravando,
                     });
                     if faltando.microfone.is_some() || faltando.alto_falante.is_some() {
                         self.avisa(Aviso::SemAudio {
@@ -596,6 +677,7 @@ impl Telefone {
                         atendida: c.atendida,
                         duracao: c.atendida_em.map_or(0, |t| agora().saturating_sub(t)),
                         fim: fim.texto().to_string(),
+                        gravacao: c.gravacao,
                     };
                     if let Err(e) = self.guarda.acrescenta_historico(&item) {
                         warn!("historico: {e}");
@@ -743,6 +825,7 @@ impl Telefone {
                 mudo: false,
                 espera: false,
                 faltando: Faltando::default(),
+                gravacao: None,
             },
         );
         if ocupado {
@@ -939,6 +1022,7 @@ impl Telefone {
                 mudo: false,
                 espera: false,
                 faltando: a.faltando,
+                gravacao: None,
             },
         );
         Ok(id)

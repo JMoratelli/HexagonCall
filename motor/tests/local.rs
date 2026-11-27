@@ -7,7 +7,7 @@
 // auxiliares tambem.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use motor::midia::{Captura, Silencio, Tom};
+use motor::midia::{Captura, Gravador, Quadro, Silencio, Tom};
 use motor::{Erro, Evento, Opcoes, Registro, Ua};
 use nucleo::conta::Conta;
 use nucleo::ligacao::Fim;
@@ -173,6 +173,63 @@ async fn liga_atende_fala_e_desliga() {
     let fb = frequencia(&ouvido_b.amostras.lock().unwrap());
     assert!((900.0..1100.0).contains(&fa), "a ouviu {fa} Hz");
     assert!((400.0..480.0).contains(&fb), "b ouviu {fb} Hz");
+}
+
+/// O nosso lado, o deles e quantas vezes a gravacao fechou.
+type Lados = (Vec<i16>, Vec<i16>, u32);
+
+/// Guarda os dois lados que a sessao entrega e quantas vezes fechou.
+#[derive(Clone, Default)]
+struct GravaTeste {
+    lados: Arc<std::sync::Mutex<Lados>>,
+}
+
+impl Gravador for GravaTeste {
+    fn quadro(&mut self, nosso: &Quadro, deles: &Quadro) {
+        let mut l = self.lados.lock().unwrap();
+        l.0.extend_from_slice(nosso);
+        l.1.extend_from_slice(deles);
+    }
+
+    fn fim(&mut self) {
+        self.lados.lock().unwrap().2 += 1;
+    }
+}
+
+#[tokio::test]
+async fn a_gravacao_ouve_os_dois_lados_juntos() {
+    let ((a, mut ra), (b, mut rb)) = par().await;
+    let id = a
+        .liga("b", Box::new(Tom::novo(440.0, 0.3)), Box::new(Silencio))
+        .await
+        .unwrap();
+    // Antes de atender nao ha audio para gravar.
+    assert!(matches!(
+        a.grava(&id, Some(Box::new(GravaTeste::default()))),
+        Err(Erro::EstadoErrado(_))
+    ));
+    let chegando = id_recebendo(&espera(&mut rb, |e| matches!(e, Evento::Recebendo { .. })).await);
+    b.atende(
+        &chegando,
+        Box::new(Tom::novo(1000.0, 0.3)),
+        Box::new(Silencio),
+    )
+    .await
+    .unwrap();
+    espera(&mut ra, |e| matches!(e, Evento::Atendida { .. })).await;
+    let gravacao = GravaTeste::default();
+    a.grava(&id, Some(Box::new(gravacao.clone()))).unwrap();
+    tokio::time::sleep(Duration::from_millis(1200)).await;
+    a.desliga(&id).await.unwrap();
+    espera(&mut ra, |e| matches!(e, Evento::Encerrada { .. })).await;
+
+    let (nosso, deles, fechou) = gravacao.lados.lock().unwrap().clone();
+    assert_eq!(nosso.len(), deles.len(), "os dois lados andam juntos");
+    assert!(nosso.len() >= 8000, "gravou so {} amostras", nosso.len());
+    let (fn_, fd) = (frequencia(&nosso), frequencia(&deles));
+    assert!((400.0..480.0).contains(&fn_), "o nosso lado tem {fn_} Hz");
+    assert!((900.0..1100.0).contains(&fd), "o outro lado tem {fd} Hz");
+    assert_eq!(fechou, 1, "a gravacao fecha uma vez, no fim da ligacao");
 }
 
 /// O que entrou no ouvido depois de `desde` amostras, pulando 200 ms para o
@@ -350,6 +407,61 @@ async fn desistir_enquanto_toca_vira_perdida_do_outro_lado() {
         fim(&espera(&mut rb, |e| matches!(e, Evento::Encerrada { .. })).await),
         Fim::Perdida
     );
+}
+
+/// Um PBX de mentira por UDP cru: o INVITE de um grupo de ramais e depois o
+/// CANCEL, com o Reason que o chan_sip poe quando outro ramal atende (ou sem).
+async fn grupo_cancela(reason: Option<&str>) -> Fim {
+    let pbx = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let do_pbx = pbx.local_addr().unwrap();
+    let porta = porta_livre();
+    let mut conta = Conta::nova("1001", "127.0.0.1");
+    conta.porta = do_pbx.port();
+    let opcoes = Opcoes {
+        porta_sip: porta,
+        registrar: false,
+    };
+    let (_ua, mut r) = Ua::inicia(conta, "senha".into(), opcoes).await.unwrap();
+    let sdp = "v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\ns=-\r\nc=IN IP4 127.0.0.1\r\nt=0 0\r\n\
+               m=audio 40000 RTP/AVP 0\r\na=rtpmap:0 PCMU/8000\r\n";
+    let comum = |metodo: &str| {
+        format!(
+            "{metodo} sip:1001@127.0.0.1:{porta} SIP/2.0\r\n\
+             Via: SIP/2.0/UDP {do_pbx};branch=z9hG4bK-grupo{porta}\r\n\
+             Max-Forwards: 70\r\n\
+             From: \"Recepcao\" <sip:1002@127.0.0.1>;tag=pbx1\r\n\
+             To: <sip:1001@127.0.0.1>\r\n\
+             Call-ID: grupo-{porta}@127.0.0.1\r\n\
+             CSeq: 102 {metodo}\r\n"
+        )
+    };
+    let invite = format!(
+        "{}Contact: <sip:1002@{do_pbx}>\r\nContent-Type: application/sdp\r\n\
+         Content-Length: {}\r\n\r\n{sdp}",
+        comum("INVITE"),
+        sdp.len()
+    );
+    pbx.send_to(invite.as_bytes(), ("127.0.0.1", porta))
+        .await
+        .unwrap();
+    espera(&mut r, |e| matches!(e, Evento::Recebendo { .. })).await;
+    let motivo = reason
+        .map(|v| format!("Reason: {v}\r\n"))
+        .unwrap_or_default();
+    let cancel = format!("{}{motivo}Content-Length: 0\r\n\r\n", comum("CANCEL"));
+    pbx.send_to(cancel.as_bytes(), ("127.0.0.1", porta))
+        .await
+        .unwrap();
+    fim(&espera(&mut r, |e| matches!(e, Evento::Encerrada { .. })).await)
+}
+
+#[tokio::test]
+async fn atendida_em_outro_ramal_nao_e_perdida() {
+    assert_eq!(
+        grupo_cancela(Some(r#"SIP;cause=200;text="Call completed elsewhere""#)).await,
+        Fim::AtendidaEmOutro
+    );
+    assert_eq!(grupo_cancela(None).await, Fim::Perdida);
 }
 
 #[tokio::test]

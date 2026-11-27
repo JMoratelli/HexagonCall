@@ -12,6 +12,8 @@ publish = false
 tauri-build = { version = "2.7.6", features = [] }
 
 [dependencies]
+# A data local no nome das gravacoes (o mesmo chrono que o Tauri ja traz).
+chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 dirs = "7.0.0"
 keyring = "4.2.0"
 motor = { path = "../motor" }

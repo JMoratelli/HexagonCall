@@ -16,6 +16,7 @@
 
 pub mod conversao;
 pub mod diagnostico;
+pub mod gravacao;
 mod pactl;
 pub mod toque;
 

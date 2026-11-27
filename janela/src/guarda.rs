@@ -91,6 +91,10 @@ pub struct Preferencias {
     pub toque_no_maximo: bool,
     /// Pausar musica e video ao atender, e voltar ao desligar.
     pub pausar_musica: bool,
+    /// Gravar as ligacoes atendidas (gravacao.rs, pedido de 27/11).
+    pub gravar: bool,
+    /// Por quantos dias uma gravacao fica; 0 guarda sempre.
+    pub guardar_gravacoes: u32,
 }
 
 impl Default for Preferencias {
@@ -107,6 +111,8 @@ impl Default for Preferencias {
             toque_em_todos: false,
             toque_no_maximo: false,
             pausar_musica: true,
+            gravar: false,
+            guardar_gravacoes: 90,
         }
     }
 }
@@ -125,6 +131,8 @@ pub struct ItemHistorico {
     pub duracao: u64,
     /// O motivo do fim, em texto ("Ocupado", "Ninguem atendeu").
     pub fim: String,
+    /// O arquivo da gravacao, na pasta das gravacoes.
+    pub gravacao: Option<String>,
 }
 
 /// Uma mensagem, enviada ou recebida.
@@ -194,9 +202,28 @@ impl Guarda {
 
     pub fn preferencias(&self) -> Preferencias {
         fs::read_to_string(self.arquivo("preferencias.toml"))
-            .ok()
-            .and_then(|t| toml::from_str(&t).ok())
+            .map(|t| preferencias_de(&t))
             .unwrap_or_default()
+    }
+
+    /// Os dias de retencao das gravacoes como estao salvos, para a retencao
+    /// apagar so com certeza: None quando o arquivo nao abre ou o valor nao
+    /// vale. Ai ela espera, em vez de cair nos 90 dias do padrao e apagar o
+    /// que o usuario mandou guardar para sempre.
+    pub fn retencao_salva(&self) -> Option<u32> {
+        let padrao = Preferencias::default().guardar_gravacoes;
+        let texto = match fs::read_to_string(self.arquivo("preferencias.toml")) {
+            Ok(t) => t,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Some(padrao),
+            Err(_) => return None,
+        };
+        match toml::from_str::<toml::Table>(&texto)
+            .ok()?
+            .get("guardarGravacoes")
+        {
+            None => Some(padrao),
+            Some(v) => v.as_integer().and_then(|d| u32::try_from(d).ok()),
+        }
     }
 
     pub fn grava_preferencias(&self, p: &Preferencias) -> Result<(), String> {
@@ -305,7 +332,9 @@ impl Guarda {
 
     pub fn historico(&self) -> Vec<ItemHistorico> {
         self.linhas("historico.txt")
-            .filter_map(|c| {
+            .filter_map(|mut c| {
+                // A gravacao veio depois (27/11): linha de antes tem 8 campos.
+                let gravacao = if c.len() == 9 { c.pop() } else { None };
                 let [quando, conta, sentido, ramal, nome, atendida, duracao, fim] =
                     <[String; 8]>::try_from(c).ok()?;
                 Some(ItemHistorico {
@@ -317,6 +346,7 @@ impl Guarda {
                     atendida: atendida == "1",
                     duracao: duracao.parse().unwrap_or(0),
                     fim,
+                    gravacao: gravacao.filter(|g| !g.is_empty()),
                 })
             })
             .collect()
@@ -332,10 +362,11 @@ impl Guarda {
             if i.atendida { "1" } else { "0" }.into(),
             i.duracao.to_string(),
             i.fim.clone(),
+            i.gravacao.clone().unwrap_or_default(),
         ];
         self.acrescenta(
             "historico.txt",
-            "# quando\tconta\tsentido\tramal\tnome\tatendida\tduracao_s\tfim",
+            "# quando\tconta\tsentido\tramal\tnome\tatendida\tduracao_s\tfim\tgravacao",
             &campos,
         )
     }
@@ -404,6 +435,23 @@ impl Guarda {
         f.write_all(texto.as_bytes())
             .map_err(|e| format!("{}: {e}", caminho.display()))
     }
+}
+
+/// As preferencias campo a campo: um que nao vale (escrito a mao, de uma versao
+/// mais nova) volta ao padrao sozinho, sem levar os outros junto.
+fn preferencias_de(texto: &str) -> Preferencias {
+    let Ok(tabela) = toml::from_str::<toml::Table>(texto) else {
+        return Preferencias::default();
+    };
+    let validos: toml::Table = tabela
+        .into_iter()
+        .filter(|(chave, valor)| {
+            let mut so = toml::Table::new();
+            so.insert(chave.clone(), valor.clone());
+            toml::Value::Table(so).try_into::<Preferencias>().is_ok()
+        })
+        .collect();
+    toml::Value::Table(validos).try_into().unwrap_or_default()
 }
 
 /// Grava num temporario e troca: o arquivo nunca fica pela metade.
@@ -507,10 +555,25 @@ mod testes {
             atendida: false,
             duracao: 0,
             fim: "Perdida".into(),
+            gravacao: None,
         };
         g.acrescenta_historico(&h).unwrap();
-        g.acrescenta_historico(&h).unwrap();
-        assert_eq!(g.historico(), vec![h.clone(), h]);
+        let gravada = ItemHistorico {
+            atendida: true,
+            duracao: 42,
+            fim: "Você desligou".into(),
+            gravacao: Some("2026-11-27_10-30-00_recebida_1002.opus".into()),
+            ..h.clone()
+        };
+        g.acrescenta_historico(&gravada).unwrap();
+        // Uma linha de antes da gravacao, com 8 campos, segue valendo.
+        let mut f = fs::OpenOptions::new()
+            .append(true)
+            .open(g.pasta().join("historico.txt"))
+            .unwrap();
+        f.write_all(b"1790000000\t1001@pbx\tentrada\t1002\tFulano\\tde Tal\t0\t0\tPerdida\n")
+            .unwrap();
+        assert_eq!(g.historico(), vec![h.clone(), gravada, h]);
         let c = ItemConversa {
             quando: 1_790_000_001,
             conta: "1001@pbx".into(),
@@ -564,9 +627,44 @@ mod testes {
             toque_em_todos: true,
             toque_no_maximo: false,
             pausar_musica: false,
+            gravar: true,
+            guardar_gravacoes: 30,
         };
         g.grava_preferencias(&p).unwrap();
         assert_eq!(g.preferencias(), p);
+    }
+
+    #[test]
+    fn um_campo_ruim_nao_leva_os_outros() {
+        let p = preferencias_de(
+            "flavor = \"Mcalls\"\nvolumeToque = 300\ntema = \"escuro\"\nguardarGravacoes = 0\n",
+        );
+        assert_eq!(p.flavor, Flavor::Hexagon, "o que nao vale volta ao padrao");
+        assert_eq!(p.volume_toque, 50);
+        assert_eq!(p.tema, Tema::Escuro, "o resto fica");
+        assert_eq!(p.guardar_gravacoes, 0);
+        assert_eq!(
+            preferencias_de("isto nao e toml ="),
+            Preferencias::default()
+        );
+    }
+
+    #[test]
+    fn a_retencao_so_vale_salva_e_valida() {
+        let g = Guarda::em(&pasta_de_teste("retencao"));
+        let _ = fs::remove_file(g.pasta().join("preferencias.toml"));
+        assert_eq!(g.retencao_salva(), Some(90), "sem arquivo: o padrao");
+        let grava = |t: &str| fs::write(g.pasta().join("preferencias.toml"), t).unwrap();
+        grava("tema = \"claro\"\n");
+        assert_eq!(g.retencao_salva(), Some(90), "sem o campo: o padrao");
+        grava("guardarGravacoes = 0\nflavor = \"Mcalls\"\n");
+        assert_eq!(g.retencao_salva(), Some(0), "outro campo ruim nao muda");
+        grava("guardarGravacoes = -1\n");
+        assert_eq!(g.retencao_salva(), None);
+        grava("guardarGravacoes = \"sempre\"\n");
+        assert_eq!(g.retencao_salva(), None);
+        grava("guardarGravacoes = 0\n[quebrado");
+        assert_eq!(g.retencao_salva(), None);
     }
 
     #[test]

@@ -11,6 +11,9 @@ pub enum Fim {
     Cancelada,
     /// O outro lado desistiu antes de atendermos, ou ninguem atendeu.
     Perdida,
+    /// Tocava aqui e em outros aparelhos (grupo de ramais, fila) e outro
+    /// atendeu: o CANCEL veio com o motivo de atendida em outro lugar.
+    AtendidaEmOutro,
     Recusada,
     Ocupado,
     Offline,
@@ -32,6 +35,52 @@ pub const fn fim_por_status(codigo: u16) -> Fim {
         603 => Fim::Recusada,
         _ => Fim::Falha(codigo),
     }
+}
+
+/// O cabecalho Reason (RFC 3326) de um CANCEL diz que a ligacao foi atendida
+/// em outro lugar: `SIP;cause=200` (o Asterisk manda com o texto "Call
+/// completed elsewhere") ou `Q.850;cause=26`. Podem vir varios motivos
+/// separados por virgula, e o texto entre aspas pode ter virgula.
+pub fn atendida_em_outro_lugar(reason: &str) -> bool {
+    fora_das_aspas(reason, ',').into_iter().any(|motivo| {
+        let mut campos = fora_das_aspas(motivo, ';').into_iter();
+        let protocolo = campos
+            .next()
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_uppercase();
+        let causa = campos.find_map(|campo| {
+            let (nome, valor) = campo.split_once('=')?;
+            nome.trim()
+                .eq_ignore_ascii_case("cause")
+                .then(|| valor.trim().trim_matches('"').parse::<u16>().ok())
+                .flatten()
+        });
+        matches!(
+            (protocolo.as_str(), causa),
+            ("SIP", Some(200)) | ("Q.850", Some(26))
+        )
+    })
+}
+
+/// Divide `texto` em `separador`, menos dentro de aspas (com `\"` escapado).
+fn fora_das_aspas(texto: &str, separador: char) -> Vec<&str> {
+    let mut partes = Vec::new();
+    let (mut inicio, mut aspas, mut escapado) = (0, false, false);
+    for (i, c) in texto.char_indices() {
+        if escapado {
+            escapado = false;
+        } else if aspas && c == '\\' {
+            escapado = true;
+        } else if c == '"' {
+            aspas = !aspas;
+        } else if c == separador && !aspas {
+            partes.push(texto.get(inicio..i).unwrap_or_default());
+            inicio = i + c.len_utf8();
+        }
+    }
+    partes.push(texto.get(inicio..).unwrap_or_default());
+    partes
 }
 
 /// O codigo do sipfrag que vem no NOTIFY de uma transferencia (RFC 3515):
@@ -56,6 +105,7 @@ impl Fim {
             Self::OutroDesligou => "O outro lado desligou".into(),
             Self::Cancelada => "Ligação cancelada".into(),
             Self::Perdida => "Ligação perdida".into(),
+            Self::AtendidaEmOutro => "Atendida em outro ramal".into(),
             Self::Recusada => "Ligação recusada".into(),
             Self::Ocupado => "Ocupado: o ramal está em outra ligação (486)".into(),
             Self::Offline => "O ramal está offline (480)".into(),
@@ -105,6 +155,25 @@ mod testes {
         assert_eq!(codigo_do_sipfrag("<presence/>"), None);
         assert_eq!(codigo_do_sipfrag("SIP/2.0 OK"), None);
         assert_eq!(codigo_do_sipfrag("SIP/2.0 99 Baixo"), None);
+    }
+
+    #[test]
+    fn o_reason_de_atendida_em_outro_lugar() {
+        // O que o chan_sip e o chan_pjsip mandam.
+        assert!(atendida_em_outro_lugar(
+            r#"SIP;cause=200;text="Call completed elsewhere""#
+        ));
+        assert!(atendida_em_outro_lugar("Q.850;cause=26"));
+        assert!(atendida_em_outro_lugar(" sip ; CAUSE = 200 "));
+        // Mais de um motivo, e virgula e aspas escapadas dentro do texto.
+        assert!(atendida_em_outro_lugar(
+            r#"Q.850;cause=16;text="a, \"b\", c", SIP;cause=200"#
+        ));
+        assert!(!atendida_em_outro_lugar("Q.850;cause=16"));
+        assert!(!atendida_em_outro_lugar(r#"SIP;text="cause=200""#));
+        assert!(!atendida_em_outro_lugar("SIP;cause=487"));
+        assert!(!atendida_em_outro_lugar(""));
+        assert!(!Fim::AtendidaEmOutro.foi_atendida());
     }
 
     #[test]

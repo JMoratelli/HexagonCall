@@ -118,13 +118,16 @@ Só depois que o app do Linux estiver pronto. **Ao fazer e validar cada item no 
 
 - [ ] Mudo do sistema ("Tirar do mudo" no aviso "Não te ouço"): no Windows não faz nada.
 - [ ] Pausar música e vídeo ao atender: no Windows não faz nada.
-- [ ] Gravação: o "Ouvir" no WebView2 e o "Abrir" da pasta.
-- [ ] Cancelamento de eco, ruído e voz mais nítida numa ligação de verdade (o `sonora` roda os testes no Windows no
-  CI dele, mas aqui nada foi ouvido no Windows).
+- [ ] Cancelamento de eco, ruído e voz mais nítida numa ligação de verdade (os testes de `som/src/eco.rs` passam no
+  Windows, mas nada foi ouvido nele: a VM de teste não tem placa de som).
 - [ ] Aviso de mensagem nova como toast (no Linux é a notificação com "Responder"; no Windows, por ora, só o som e o
   número na aba Conversas: `notificacao.rs`, `mensagem`).
-- [ ] Repetir no Windows o que foi validado no Linux desde 26/11 (atendida em outro ramal, gravação, sonda e
-  reconexão, menu e atalhos do navegador desligados).
+- [ ] O menu do botão direito nos campos de uma linha (discar, as buscas) traz o "Importar Senhas" do Edge, que abre
+  uma janela solta do Edge com erro (`edge://settings/autofill/passwords`, ERR_INVALID_URL). Na caixa de mensagem não
+  aparece. Não sai com `autocomplete="off"` (já está nos campos), com `generalAutofillEnabled: false` nem desligando
+  as features do Edge (`--disable-features`, todas as de senha, autofill e carteira); o `ContextMenuRequested` do
+  WebView2, que tiraria o item, pede `unsafe`. Saída sem `unsafe`: um menu do próprio app nos campos (Recortar,
+  Copiar, Colar, Selecionar tudo), com a área de transferência liberada para a página (`enable_clipboard_access`).
 
 ## O PBX de teste
 
@@ -187,6 +190,34 @@ fora do git (só na máquina de quem testa). Medido na bancada:
   trazer o hash velho de uma release corrigida).
 - Na máquina de teste o WebView2 estava quebrado (atualização da Microsoft pela metade); o app abria só com o aviso em
   inglês do Tauri. Fica para o instalador: ele confere e oferece baixar o oficial.
+
+## Validado no Windows (27/11/2026, a mesma VM, contra um PBX falso local)
+
+O que o Linux validou desde 26/11, repetido no Windows com o app em release contra um PBX falso por UDP cru em
+127.0.0.1 (registra, responde à sonda, liga com tom de 1 kHz, cancela com ou sem o `Reason`, cala e volta):
+
+- [x] fmt, clippy `-D warnings` e todos os testes do workspace, com os da gravação e do eco.
+- [x] Atendida em outro ramal: o toast aparece e sai com o CANCEL; "Ligação de Grupo atendida em outro ramal", a linha
+  em âmbar e "Perdidas" sem contar. Sem o `Reason`, perdida.
+- [x] Gravação: atendida na janela, o `.opus` em `%LOCALAPPDATA%\hexagon-call\gravacoes`, o "Ouvir" toca dentro do
+  WebView2 (0:04 de 0:04; os bytes chegam como `ArrayBuffer`) e o "Abrir" abre a pasta no Explorer. Excluir do
+  histórico com "Apagar também a gravação" apaga a linha e o arquivo. A retenção de 7 dias pede o "Apagar" e apaga só
+  a vencida; uma com data de antes de 18/11 nunca vence, como manda o código.
+- [x] Sonda e reconexão: PBX calado, a barra fica âmbar ("sem resposta", depois "reconectando") uns 24 s depois e o
+  REGISTER se repete a cada uns 30 s; o PBX volta e a conta registra em 1 a 2 s, sozinha. Com a porta do PBX fechada
+  (o Windows devolve o ICMP como erro 10054 no `recv`), o rsipstack só avisa no log e segue; volta igual.
+- [x] Menu e atalhos do navegador: F5, Ctrl+R, Ctrl+Shift+R, Ctrl+P, F, S, O, U, J, H, G, F3, F7, F11, F12,
+  Ctrl+Shift+I/J/C, Alt+←, zoom pelo teclado: nada recarrega (o número digitado fica no campo), nada abre. O botão
+  direito fora dos campos não abre menu; nos campos, o de editar (com o "Importar Senhas", no backlog acima).
+- [x] Nomes em Ramais (o `nomes.toml`, e o nome novo no histórico) e a mensagem com a janela escondida (sem toast, como
+  diz o backlog; o "1" em Conversas).
+- [x] Atualização de ponta a ponta com o atualizador novo, com o download lento de propósito: uma ligação que chegou no
+  meio fez a troca desistir ("Chegou uma ligação; atualize quando ela acabar"), sem abrir o instalador e com a
+  ligação tocando; depois de recusar, "Tentar de novo" instalou a 0.1.1, que voltou sozinha (o Sobre mostra 0.1.1).
+- [x] Desinstalar guarda as gravações: sai o ícone das notificações, ficam `gravacoes\` e o `.opus`. Atenção: o Inno
+  junta no `unins000.dat` as regras de desinstalação de todas as versões instaladas por cima; uma instalação que já
+  teve a regra antiga (apagar a pasta inteira) continua apagando as gravações. Aqui foi só o pacote de teste de 26/11,
+  que não saiu em release; uma regra de apagar que for para uma release fica nas instalações para sempre.
 
 ## Validado no Linux (26/11/2026, AppImage do Ubuntu 22.04 no CachyOS)
 

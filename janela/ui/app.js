@@ -228,7 +228,7 @@ function matchHTML () {
   if (!v) return '<p class="mhint">Digite o ramal ou o número. <kbd>Enter</kbd> liga.</p>'
   const list = matches().slice(0, 3)
   if (!list.length) return '<p class="mhint">' + (ehNumero(v) ? '<kbd>Enter</kbd> liga para ' + esc(v) + '.' : 'Ninguém com esse nome por aqui. Digite o ramal.') + '</p>'
-  return list.map((d, i) => '<button type="button" class="opt" data-act="dialpick" data-v="' + esc(d.r) + '"' + (i === 0 ? ' data-first="1"' : '') + ' tabindex="-1">' + av(d, 'sm') + '<span class="nm">' + esc(d.n) + '</span><span class="ct">' + esc(d.r) + '</span>' + (i === 0 && !ehNumero(v) ? '<kbd>Enter</kbd>' : '') + '</button>').join('')
+  return list.map((d, i) => '<button type="button" class="opt" data-act="dialpick" data-v="' + esc(d.r) + '"' + (i === 0 ? ' data-first="1"' : '') + ' title="Ligar para ' + esc(d.n) + '" tabindex="-1">' + av(d, 'sm') + '<span class="nm">' + esc(d.n) + '</span><span class="ct">' + esc(d.r) + '</span>' + (i === 0 && !ehNumero(v) ? '<kbd>Enter</kbd>' : '') + '</button>').join('')
 }
 function renderMatch () { const el = $('#match-main'); if (el) el.innerHTML = matchHTML() }
 function dialTarget () {
@@ -878,7 +878,8 @@ document.addEventListener('click', async e => {
       if (await acao('transfere', { id: c.id, destino: t }, 'Não transferi')) { toast('Transferindo para ' + t + '…'); state.panel = 'call'; renderLeft() }
       break
     }
-    case 'dialpick': state.dial = v; { const i = $('#dial-main'); if (i) i.value = v } renderMatch(); focusDial(); break
+    // Um clique no achado da busca ja liga (pedido de 27/11).
+    case 'dialpick': startCall(v); break
     case 'dialgo': {
       const t = dialTarget()
       if (!t) { toast(state.dial.trim() ? 'Ninguém com esse nome por aqui. Digite o ramal.' : 'Digite um ramal ou número.'); break }

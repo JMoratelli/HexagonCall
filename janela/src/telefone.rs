@@ -69,7 +69,18 @@ struct Linha {
     /// essa se tenta de novo sozinha. Recusa de senha repetida faz o
     /// fail2ban do PBX bloquear o IP.
     falha_de_rede: bool,
+    /// A ultima resposta do PBX a sonda: em quantos ms e quando.
+    pbx: Option<(u32, u64)>,
+    /// Sondas seguidas sem resposta.
+    sem_resposta: u32,
+    /// Desde quando o PBX nao responde (sonda ou registro sem resposta); some
+    /// quando a conta registra de novo.
+    fora_desde: Option<u64>,
 }
+
+/// Sondas seguidas sem resposta (uns 10 s, com a reconferencia de 5 s) para a
+/// conta aparecer "sem resposta do PBX" e subir de novo.
+const SEM_RESPOSTA: u32 = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -113,6 +124,16 @@ pub struct ContaVista {
     pub registro: EstadoRegistro,
     pub detalhe: Option<String>,
     pub senha: Option<OndeASenha>,
+    /// O PBX respondeu a ultima sonda em tantos ms (None: ainda nao respondeu).
+    pub pbx_ms: Option<u32>,
+    /// Quando respondeu pela ultima vez (segundos desde 1970).
+    pub pbx_em: Option<u64>,
+    /// O PBX parou de responder (duas sondas seguidas).
+    pub sem_resposta: bool,
+    /// A ultima falha do registro foi de rede (sem resposta), nao recusa.
+    pub falha_de_rede: bool,
+    /// Desde quando o PBX nao responde (segundos desde 1970).
+    pub fora_desde: Option<u64>,
 }
 
 /// A ligacao em andamento, para a tela se recompor (janela reaberta).
@@ -162,6 +183,16 @@ pub struct Estado {
 pub enum Aviso {
     Contas {
         contas: Vec<ContaVista>,
+    },
+    /// A sonda do PBX de uma conta, a cada resposta (ou falta dela).
+    Pbx {
+        conta: String,
+        #[serde(rename = "pbxMs")]
+        pbx_ms: Option<u32>,
+        #[serde(rename = "pbxEm")]
+        pbx_em: Option<u64>,
+        #[serde(rename = "semResposta")]
+        sem_resposta: bool,
     },
     Recebendo {
         id: String,
@@ -335,6 +366,9 @@ impl Telefone {
                 registro: EstadoRegistro::Iniciando,
                 detalhe: None,
                 falha_de_rede: false,
+                pbx: None,
+                sem_resposta: 0,
+                fora_desde: None,
             })
             .collect();
         self.avisa_contas();
@@ -379,6 +413,11 @@ impl Telefone {
                 registro: l.registro,
                 detalhe: l.detalhe.clone(),
                 senha: self.guarda.onde_a_senha(&l.conta.id()),
+                pbx_ms: l.pbx.map(|(ms, _)| ms),
+                pbx_em: l.pbx.map(|(_, em)| em),
+                sem_resposta: l.sem_resposta >= SEM_RESPOSTA,
+                falha_de_rede: l.falha_de_rede,
+                fora_desde: l.fora_desde,
             })
             .collect()
     }
@@ -444,6 +483,13 @@ impl Telefone {
             l.registro = registro;
             l.detalhe = detalhe;
             l.falha_de_rede = falha_de_rede;
+            match registro {
+                EstadoRegistro::Registrado => l.fora_desde = None,
+                EstadoRegistro::Falhou if falha_de_rede => {
+                    l.fora_desde.get_or_insert_with(agora);
+                }
+                _ => {}
+            }
         }
         self.avisa_contas();
     }
@@ -458,6 +504,7 @@ impl Telefone {
         let opcoes = Opcoes {
             porta_sip: 0,
             registrar: conta.registra,
+            ..Opcoes::default()
         };
         let registra = conta.registra;
         match Ua::inicia(conta, senha, opcoes).await {
@@ -491,8 +538,39 @@ impl Telefone {
         if let Some(ua) = ua {
             ua.abandona().await;
         }
+        if let Some(l) = trava(&self.linhas).iter_mut().find(|l| l.conta.id() == id) {
+            l.sem_resposta = 0;
+        }
         self.marca_linha(id, EstadoRegistro::Iniciando, None);
         self.liga_conta(conta).await;
+    }
+
+    /// A sonda do PBX respondeu (ou nao). Quem sobe a conta de novo quando o
+    /// PBX some e o vigia da rede.
+    fn resposta_do_pbx(&self, conta: &str, resposta: Option<Duration>) {
+        let aviso = {
+            let mut linhas = trava(&self.linhas);
+            let Some(l) = linhas.iter_mut().find(|l| l.conta.id() == conta) else {
+                return;
+            };
+            match resposta {
+                Some(t) => {
+                    l.sem_resposta = 0;
+                    l.pbx = Some((u32::try_from(t.as_millis()).unwrap_or(u32::MAX), agora()));
+                }
+                None => l.sem_resposta = l.sem_resposta.saturating_add(1),
+            }
+            if l.sem_resposta >= SEM_RESPOSTA {
+                l.fora_desde.get_or_insert_with(agora);
+            }
+            Aviso::Pbx {
+                conta: conta.to_string(),
+                pbx_ms: l.pbx.map(|(ms, _)| ms),
+                pbx_em: l.pbx.map(|(_, em)| em),
+                sem_resposta: l.sem_resposta >= SEM_RESPOSTA,
+            }
+        };
+        self.avisa(aviso);
     }
 
     /// "Reconectar", na tela.
@@ -522,14 +600,18 @@ impl Telefone {
             if acordou {
                 info!("o computador voltou da suspensao");
             }
-            let contas: Vec<(String, Option<Arc<Ua>>, bool)> = trava(&self.linhas)
+            let contas: Vec<(String, Option<Arc<Ua>>, bool, bool)> = trava(&self.linhas)
                 .iter()
                 .map(|l| {
                     let rede = l.registro == EstadoRegistro::Falhou && l.falha_de_rede;
-                    (l.conta.id(), l.ua.clone(), rede)
+                    // Registrada, mas o PBX nao responde a sonda: o registro
+                    // que ele guarda pode nem valer mais.
+                    let sumiu =
+                        l.registro == EstadoRegistro::Registrado && l.sem_resposta >= SEM_RESPOSTA;
+                    (l.conta.id(), l.ua.clone(), rede, sumiu)
                 })
                 .collect();
-            for (id, ua, falha_de_rede) in contas {
+            for (id, ua, falha_de_rede, pbx_sumiu) in contas {
                 // Falha de rede (nem subiu, ou o PBX nao respondeu): de novo a
                 // cada 30 s, se nao houver ligacao.
                 if falha_de_rede && ua.as_ref().is_none_or(|u| !u.em_ligacao()) {
@@ -552,6 +634,7 @@ impl Telefone {
                     Some(ip) if ip != ua.ip() => Some("a rede mudou"),
                     Some(_) if sem_rota.remove(&id) => Some("a rede voltou"),
                     Some(_) if acordou => Some("voltou da suspensao"),
+                    Some(_) if pbx_sumiu => Some("o PBX parou de responder"),
                     Some(_) if pendentes.contains(&id) => Some("pendente"),
                     Some(_) => None,
                 };
@@ -596,11 +679,15 @@ impl Telefone {
                     self.marca_linha(&conta, EstadoRegistro::Registrado, None);
                 }
                 Evento::Registro(Registro::Falhou { codigo, motivo }) => {
+                    // 408: o REGISTER ficou sem resposta (o rsipstack responde
+                    // isso sozinho quando o PBX some). E falta de rede, nao
+                    // recusa: tenta de novo a cada 30 s, como sem codigo.
+                    let de_rede = matches!(codigo, None | Some(408));
                     let detalhe = match codigo {
+                        Some(408) => "o PBX não respondeu".to_string(),
                         Some(c) => format!("{c} {motivo}"),
                         None => motivo,
                     };
-                    let de_rede = codigo.is_none();
                     self.marca_linha_com(&conta, EstadoRegistro::Falhou, Some(detalhe), de_rede);
                 }
                 Evento::Registro(Registro::Desregistrado) => {
@@ -689,6 +776,7 @@ impl Telefone {
                         "A transferência não se completou ({codigo}). A ligação continua com você."
                     ));
                 }
+                Evento::Pbx { resposta } => self.resposta_do_pbx(&conta, resposta),
                 Evento::Presenca { .. } | Evento::PresencaEncerrada { .. } => {}
             }
         }
@@ -1127,6 +1215,9 @@ impl Telefone {
             registro: EstadoRegistro::Iniciando,
             detalhe: None,
             falha_de_rede: false,
+            pbx: None,
+            sem_resposta: 0,
+            fora_desde: None,
         };
         let ua_antigo = {
             let mut linhas = trava(&self.linhas);

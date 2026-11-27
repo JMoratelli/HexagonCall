@@ -8,7 +8,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use motor::midia::{Captura, Gravador, Quadro, Silencio, Tom};
-use motor::{Erro, Evento, Opcoes, Registro, Ua};
+use motor::{Erro, Evento, Opcoes, Registro, Sonda, Ua};
 use nucleo::conta::Conta;
 use nucleo::ligacao::Fim;
 use rsipstack::EndpointBuilder;
@@ -42,6 +42,7 @@ async fn ua(
     let opcoes = Opcoes {
         porta_sip: porta_propria,
         registrar: false,
+        sonda: None,
     };
     Ua::inicia(conta, "senha".into(), opcoes).await.unwrap()
 }
@@ -420,6 +421,7 @@ async fn grupo_cancela(reason: Option<&str>) -> Fim {
     let opcoes = Opcoes {
         porta_sip: porta,
         registrar: false,
+        sonda: None,
     };
     let (_ua, mut r) = Ua::inicia(conta, "senha".into(), opcoes).await.unwrap();
     let sdp = "v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\ns=-\r\nc=IN IP4 127.0.0.1\r\nt=0 0\r\n\
@@ -478,14 +480,28 @@ async fn destino_invalido_nem_sai() {
 /// Responde 401 a quem chega sem Authorization e confere o digest de quem
 /// chega com: 200 se a senha bate, 403 se nao (o que o chan_sip faz).
 async fn servidor_com_senha(senha: &'static str) -> (SocketAddr, CancellationToken) {
+    servidor_com_senha_em("127.0.0.1:0".parse().unwrap(), senha).await
+}
+
+/// O mesmo servidor num endereco escolhido (o PBX que volta no mesmo lugar).
+/// O socket do que caiu pode demorar um pouco a soltar a porta.
+async fn servidor_com_senha_em(
+    endereco: SocketAddr,
+    senha: &'static str,
+) -> (SocketAddr, CancellationToken) {
     let cancela = CancellationToken::new();
-    let udp = UdpConnection::create_connection(
-        "127.0.0.1:0".parse().unwrap(),
-        None,
-        Some(cancela.child_token()),
-    )
-    .await
-    .unwrap();
+    let mut tentativas = 0;
+    let udp = loop {
+        match UdpConnection::create_connection(endereco, None, Some(cancela.child_token())).await {
+            Ok(u) => break u,
+            Err(e) if tentativas < 40 => {
+                tentativas += 1;
+                let _ = e;
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+            Err(e) => panic!("a porta {endereco} nao soltou: {e}"),
+        }
+    };
     let endereco = udp.get_addr().get_socketaddr().unwrap();
     let transporte = TransportLayer::new(cancela.clone());
     transporte.add_transport(udp.into());
@@ -543,10 +559,40 @@ async fn ua_no_servidor(
         Opcoes {
             porta_sip: 0,
             registrar,
+            sonda: None,
         },
     )
     .await
     .unwrap()
+}
+
+#[tokio::test]
+async fn a_sonda_ve_o_pbx_cair_e_voltar() {
+    let (servidor, cancela) = servidor_com_senha("certa").await;
+    let mut conta = Conta::nova("1001", "127.0.0.1");
+    conta.porta = servidor.port();
+    let sonda = Sonda {
+        intervalo: Duration::from_millis(200),
+        espera: Duration::from_millis(400),
+        reconfere: Duration::from_millis(100),
+    };
+    let opcoes = Opcoes {
+        porta_sip: 0,
+        registrar: false,
+        sonda: Some(sonda),
+    };
+    let (_ua, mut r) = Ua::inicia(conta, "certa".into(), opcoes).await.unwrap();
+    // O OPTIONS passa pela senha (401 e de novo) e volta com o tempo.
+    match espera(&mut r, |e| matches!(e, Evento::Pbx { .. })).await {
+        Evento::Pbx { resposta: Some(t) } => assert!(t < Duration::from_secs(1), "{t:?}"),
+        outro => panic!("esperava resposta do PBX, veio {outro:?}"),
+    }
+    // O PBX cai: a sonda fica sem resposta.
+    cancela.cancel();
+    espera(&mut r, |e| matches!(e, Evento::Pbx { resposta: None })).await;
+    // E volta no mesmo endereco: a sonda ve.
+    let (_de_novo, _c) = servidor_com_senha_em(servidor, "certa").await;
+    espera(&mut r, |e| matches!(e, Evento::Pbx { resposta: Some(_) })).await;
 }
 
 #[tokio::test]

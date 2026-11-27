@@ -12,4 +12,4 @@ mod rede;
 pub mod ua;
 
 pub use erro::Erro;
-pub use ua::{Evento, Opcoes, Registro, Sentido, Ua};
+pub use ua::{Evento, Opcoes, Registro, Sentido, Sonda, Ua};

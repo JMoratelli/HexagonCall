@@ -126,7 +126,27 @@ const REGISTRO = {
   'sem-senha': ['Sem senha', 'var(--warn)'],
   parada: ['Parada', 'var(--muted-fg)']
 }
-const regPill = c => { const [t, cor] = REGISTRO[c.registro] || REGISTRO.parada; return '<span class="pill" style="--c:' + cor + '"' + (c.detalhe ? ' title="' + esc(c.detalhe) + '"' : '') + '><span class="dot"></span>' + t + (c.detalhe ? ' · ' + esc(c.detalhe) : '') + '</span>' }
+// O estado da conta como a tela mostra: o registro e a sonda do PBX (OPTIONS a cada 30 s) juntos. Sem resposta
+// do PBX (a sonda, ou o registro sem resposta) e ambar e o app tenta sozinho; vermelho so quando o PBX recusa.
+const reconectando = c => !!c.foraDesde && (c.registro === 'iniciando' || (c.registro === 'falhou' && c.falhaDeRede))
+function estadoConta (c) {
+  if (c.registro === 'registrado' && c.semResposta) return ['Sem resposta do PBX', 'var(--warn)']
+  if (reconectando(c)) return ['Sem conexão com o PBX', 'var(--warn)']
+  return REGISTRO[c.registro] || REGISTRO.parada
+}
+const CURTO = { iniciando: 'conectando', falhou: 'falhou', 'sem-senha': 'sem senha', parada: 'parada' }
+const curtoConta = c => c.registro === 'registrado' && c.semResposta ? 'sem resposta' : reconectando(c) ? 'reconectando' : CURTO[c.registro] || ''
+function pbxTexto (c) {
+  if (reconectando(c) || (c.registro === 'registrado' && c.semResposta)) return 'sem resposta desde ' + hora(c.foraDesde) + '; tenta de novo sozinho a cada 30 s'
+  if (c.pbxMs == null || c.pbxEm == null) return ''
+  const s = Math.max(0, Math.round(Date.now() / 1000 - c.pbxEm))
+  return 'o PBX respondeu em ' + c.pbxMs + ' ms, há ' + (s < 90 ? s + ' s' : Math.round(s / 60) + ' min')
+}
+const regPill = c => {
+  const [t, cor] = estadoConta(c), extra = [c.detalhe, pbxTexto(c)].filter(Boolean).join(' · ')
+  const ms = c.registro === 'registrado' && !c.semResposta && c.pbxMs != null ? ' · ' + c.pbxMs + ' ms' : ''
+  return '<span class="pill" style="--c:' + cor + '"' + (extra ? ' title="' + esc(extra) + '"' : '') + '><span class="dot"></span>' + t + ms + (c.detalhe ? ' · ' + esc(c.detalhe) : '') + '</span>'
+}
 
 // ---- A barra do app: marca, abas, registro e engrenagem ----
 function renderChrome () {
@@ -141,8 +161,8 @@ function renderChrome () {
   let status
   if (!c) status = '<button type="button" class="status" style="--c:var(--warn)" data-act="nova-conta" title="Cadastre o seu ramal"><span class="dot"></span>Sem conta</button>'
   else {
-    const [t, cor] = REGISTRO[c.registro] || REGISTRO.parada
-    status = '<button type="button" class="status" style="--c:' + cor + '" data-act="go" data-v="ajustes" title="' + esc(c.id + ' · ' + t + (c.detalhe ? ': ' + c.detalhe : '')) + '"><span class="dot"></span>' + esc(c.usuario) + (state.contas.length > 1 ? ' +' + (state.contas.length - 1) : '') + '</button>'
+    const [t, cor] = estadoConta(c), curto = curtoConta(c)
+    status = '<button type="button" class="status" style="--c:' + cor + '" data-act="go" data-v="ajustes" title="' + esc([c.id, t + (c.detalhe ? ': ' + c.detalhe : ''), pbxTexto(c)].filter(Boolean).join(' · ')) + '"><span class="dot"></span>' + esc(c.usuario) + (curto ? ' · ' + curto : '') + (state.contas.length > 1 ? ' +' + (state.contas.length - 1) : '') + '</button>'
   }
   // A barra de cima e a da janela: marca, conta e os botoes (arrasta pelo vazio).
   $('#abar').innerHTML = '<span class="brand" data-tauri-drag-region>' + MARK + '<span>' + brandName() + '</span></span>' + status +
@@ -682,6 +702,15 @@ function aplica (e) {
 }
 function recebe (a) {
   switch (a.tipo) {
+    case 'pbx': {
+      const c = state.contas.find(x => x.id === a.conta); if (!c) break
+      const mudou = c.semResposta !== a.semResposta || (c.pbxMs == null) !== (a.pbxMs == null)
+      Object.assign(c, { pbxMs: a.pbxMs, pbxEm: a.pbxEm, semResposta: a.semResposta })
+      if (a.semResposta && !c.foraDesde) c.foraDesde = Math.round(Date.now() / 1000)
+      renderChrome()
+      if (mudou && state.view === 'ajustes' && (state.secao || 'contas') === 'contas' && !state.form) renderView()
+      break
+    }
     case 'contas':
       state.contas = a.contas; renderChrome()
       if (state.view === 'ajustes' && !(state.form && document.activeElement && document.activeElement.closest('#fconta'))) renderView()

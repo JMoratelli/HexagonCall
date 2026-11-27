@@ -296,6 +296,10 @@ fn mostra(evento: &Evento) {
             nome.as_ref().map_or(String::new(), |n| format!(" ({n})"))
         ),
         Evento::Tocando { .. } => "tocando do outro lado".into(),
+        Evento::Pbx {
+            resposta: Some(t), ..
+        } => format!("o PBX respondeu em {} ms", t.as_millis()),
+        Evento::Pbx { resposta: None } => "o PBX nao respondeu".into(),
         Evento::Atendida { codec, .. } => format!("atendida ({})", codec.nome()),
         Evento::Espera { sim: true, .. } => "o outro lado pos em espera".into(),
         Evento::Espera { sim: false, .. } => "o outro lado tirou da espera".into(),
@@ -388,6 +392,7 @@ async fn executa(args: Args) -> Result<(), String> {
     let opcoes = Opcoes {
         porta_sip: args.porta_sip,
         registrar,
+        ..Opcoes::default()
     };
     let (ua, mut eventos) = Ua::inicia(conta, senha, opcoes)
         .await

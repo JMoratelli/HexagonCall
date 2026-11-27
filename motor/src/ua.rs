@@ -35,7 +35,7 @@ use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
@@ -97,12 +97,39 @@ pub enum Evento {
         fim: Fim,
         estatistica: Option<Estatistica>,
     },
+    /// A sonda do PBX (OPTIONS): respondeu, em quanto tempo, ou nao respondeu
+    /// (`None`). Vem a cada `Sonda::intervalo`, e mais cedo depois de uma falha.
+    Pbx {
+        resposta: Option<Duration>,
+    },
     /// O PBX aceitou a transferencia, mas ela nao se completou (o NOTIFY
     /// trouxe uma falha final): a ligacao segue com quem estava.
     TransferenciaFalhou {
         id: String,
         codigo: u16,
     },
+}
+
+/// A sonda do PBX: um OPTIONS de tempos em tempos, como o qualify do Asterisk.
+/// O sinal de vida (CRLF) so mantem o caminho aberto e nao tem resposta; a
+/// sonda e o que diz se o PBX esta la.
+#[derive(Debug, Clone, Copy)]
+pub struct Sonda {
+    pub intervalo: Duration,
+    /// Quanto esperar a resposta.
+    pub espera: Duration,
+    /// Depois de uma sem resposta, a proxima vem mais cedo, para confirmar.
+    pub reconfere: Duration,
+}
+
+impl Default for Sonda {
+    fn default() -> Self {
+        Self {
+            intervalo: Duration::from_secs(30),
+            espera: Duration::from_secs(5),
+            reconfere: Duration::from_secs(5),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -113,6 +140,8 @@ pub struct Opcoes {
     /// para testar sem tirar o ramal de outro aparelho: o chan_sip guarda um
     /// contato so por ramal.
     pub registrar: bool,
+    /// None: sem sonda.
+    pub sonda: Option<Sonda>,
 }
 
 impl Default for Opcoes {
@@ -120,6 +149,7 @@ impl Default for Opcoes {
         Self {
             porta_sip: 0,
             registrar: true,
+            sonda: Some(Sonda::default()),
         }
     }
 }
@@ -445,6 +475,9 @@ impl Ua {
         tokio::spawn(Arc::clone(&ua).laco_entrada(entrada));
         tokio::spawn(Arc::clone(&ua).laco_estados(estados_rx));
         tokio::spawn(Arc::clone(&ua).laco_sinal_de_vida());
+        if let Some(sonda) = opcoes.sonda {
+            tokio::spawn(Arc::clone(&ua).laco_sonda(sonda));
+        }
         if opcoes.registrar && ua.conta.registra {
             let tarefa = tokio::spawn(Arc::clone(&ua).laco_registro());
             *trava(&ua.tarefa_registro) = Some(tarefa);
@@ -555,6 +588,43 @@ impl Ua {
             return Ok(resp);
         }
         Err(Erro::SemResposta)
+    }
+
+    // ---- O PBX esta la? ----
+
+    /// Pergunta ao PBX se ele esta la (OPTIONS) e devolve quanto tempo levou.
+    /// Qualquer resposta vale, ate um 404: o caminho ate ele funciona.
+    pub async fn sonda(&self, espera: Duration) -> Result<Duration, Erro> {
+        let uri = Uri::try_from(self.conta.servidor().as_str())?;
+        let inicio = Instant::now();
+        match tokio::time::timeout(espera, self.envia(Pedido::novo(Method::Options, uri))).await {
+            Ok(Ok(_)) => Ok(inicio.elapsed()),
+            Ok(Err(e)) => Err(e),
+            Err(_) => Err(Erro::SemResposta),
+        }
+    }
+
+    async fn laco_sonda(self: Arc<Self>, sonda: Sonda) {
+        let mut espera = Duration::ZERO;
+        loop {
+            let resposta = tokio::select! {
+                () = self.cancela.cancelled() => return,
+                r = async {
+                    tokio::time::sleep(espera).await;
+                    self.sonda(sonda.espera).await
+                } => r,
+            };
+            if let Err(e) = &resposta {
+                debug!("o PBX nao respondeu a sonda: {e}");
+            }
+            let resposta = resposta.ok();
+            espera = if resposta.is_some() {
+                sonda.intervalo
+            } else {
+                sonda.reconfere
+            };
+            self.avisa(Evento::Pbx { resposta });
+        }
     }
 
     // ---- Mensagens ----
@@ -1516,7 +1586,7 @@ impl Ua {
                         }
                         RefreshOutcome::Rejected(resp) => Registro::Falhou {
                             codigo: Some(codigo(resp)),
-                            motivo: resp.status_code.to_string(),
+                            motivo: resp.status_code.text().to_string(),
                         },
                         RefreshOutcome::Failed(e) => Registro::Falhou {
                             codigo: None,

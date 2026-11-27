@@ -444,9 +444,12 @@ const contaComProblema = () => state.contas.some(c => c.registro === 'falhou' ||
 function renderAjustes () {
   const sec = state.secao || 'contas'
   const secoes = { contas: secContas, audio: secAudio, toques: secToques, aparencia: secAparencia, janela: secJanela, sobre: secSobre }
+  // Redesenhar a mesma secao (um botao la embaixo) nao volta para o topo.
+  const antes = $('#cfgpane'), rolagem = antes && antes.dataset.sec === sec ? antes.scrollTop : 0
   $('#content').innerHTML = '<div class="cfg"><nav class="cfgnav" aria-label="Seções das configurações">' +
     SECOES.map(([v, l, i]) => '<button type="button" data-act="secao" data-v="' + v + '"' + (sec === v ? ' aria-current="page"' : '') + '>' + ic(i) + '<span>' + l + '</span>' + (v === 'contas' && contaComProblema() ? '<span class="dot" style="--c:var(--warn)" title="Conta com problema"></span>' : '') + '</button>').join('') +
-    '</nav><section class="cfgpane" id="cfgpane" aria-label="' + esc((SECOES.find(x => x[0] === sec) || SECOES[0])[1]) + '">' + (secoes[sec] || secContas)() + '</section></div>'
+    '</nav><section class="cfgpane" id="cfgpane" data-sec="' + sec + '" aria-label="' + esc((SECOES.find(x => x[0] === sec) || SECOES[0])[1]) + '">' + (secoes[sec] || secContas)() + '</section></div>'
+  $('#cfgpane').scrollTop = rolagem
 }
 function secContas () {
   const linhas = state.contas.map(c => {

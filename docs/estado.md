@@ -118,7 +118,9 @@ aberto:
   atalho escapa `%` e reconhece o de outro gerenciador pelo caminho exato; e, nos dois sistemas, uma ligação que chega
   durante o download faz a troca desistir em vez de ser cortada.
 - [ ] O som da tela (teclas, chamando) tocando de dentro da AppImage, e uma ligação de verdade por ela.
-- [ ] A AppImage do CI (o job `linux` do Pacote) e uma release de verdade no GitHub.
+- [x] A AppImage do CI: o job `linux` do Pacote (run à mão em 26/11) gerou a AppImage, o `.zsync` com o nome final e o
+  `SHA256SUMS.txt`, que conferem, com a informação de atualização embutida.
+- [ ] Uma release de verdade no GitHub (tag `vX.Y.Z`), com os pacotes dos dois sistemas.
 
 ## Próximos passos
 

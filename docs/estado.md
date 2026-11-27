@@ -30,6 +30,27 @@ O que está validado, o que falta e as decisões tomadas. Atualizar ao fim de ca
 - Base SIP: **rsipstack** (MIT), sem as features de TLS e WebSocket, que o PBX não usa. G.711, RTP, jitter, SDP e
   presença ficam no `nucleo`, nossos e testados.
 
+## Decisões (27/11/2026)
+
+- **AppImageHub por último**, quando o resto estiver pronto. É o catálogo das lojas de AppImage (AppImagePool e outras;
+  o Discover e a Central do GNOME não mostram AppImage): um PR em `AppImage/appimage.github.io` com o arquivo
+  `data/Hexagon_Call` e a linha `https://github.com/JMoratelli/HexagonCall/`. O teste deles roda a AppImage da release
+  mais nova no Ubuntu LTS mais antigo com suporte (a nossa já é feita no 22.04), sem rede, e exige a **interface em
+  inglês** por padrão: antes do PR, traduzir a tela (português quando o `LANG` for `pt_*`). Depois de aceito, as
+  releases novas entram sozinhas.
+- **Atendida em outro ramal**: o grupo de ramais ou a fila que tocou aqui e outro atendeu não é perdida. O Asterisk
+  derruba as outras pernas com um CANCEL que leva `Reason: SIP;cause=200;text="Call completed elsewhere"` (ou
+  `Q.850;cause=26`); o rsipstack responde o CANCEL sozinho, então o motor lê o `Reason` antes, num `MessageInspector`
+  (`motor/src/ua.rs`). No histórico, em âmbar (pedido de 27/11), fora das "Perdidas".
+- **Gravação das ligações** (Ajustes → Áudio): Opus num `.opus` (Ogg), as duas vozes misturadas, mono a 8 kHz e
+  12 kbit/s (uns 5 MB por hora). O codificador é o `opus-rs` (o libopus 1.6 portado para Rust, BSD-3): sem C para
+  compilar no Windows nem na AppImage. Grava do atendimento ao fim, quando a opção está ligada. Retenção de 7, 30 ou
+  90 dias, 1 ano ou sempre (90 de padrão), aplicada ao abrir e a cada 6 horas; escolher um prazo que apagaria alguma
+  gravação agora pede confirmação. O "Ouvir" no histórico toca dentro do app.
+- **Só a interface do app**: o menu do navegador (Inspecionar, Recarregar) e os atalhos dele (F5, Ctrl+R, Ctrl+P,
+  Ctrl+F, o inspetor) desligados pela tela, nos dois sistemas; nos campos de texto o menu de copiar e colar fica. O
+  WebView2 tem uma opção própria para os atalhos, mas o Tauri não a expõe, e chamá-la direto pediria `unsafe`.
+
 ## O PBX de teste
 
 Asterisk 13 com chan_sip, UDP 5060, sem TLS, realm `asterisk`. O servidor, os ramais e a senha ficam no `.env` da raiz,
@@ -121,6 +142,28 @@ aberto:
 - [x] A AppImage do CI: o job `linux` do Pacote (run à mão em 26/11) gerou a AppImage, o `.zsync` com o nome final e o
   `SHA256SUMS.txt`, que conferem, com a informação de atualização embutida.
 - [ ] Uma release de verdade no GitHub (tag `vX.Y.Z`), com os pacotes dos dois sistemas.
+
+## Validado em 27/11/2026 (testes locais e a janela num KWin virtual)
+
+- [x] Atendida em outro ramal: no motor, um PBX falso por UDP cru manda o INVITE e o CANCEL com o `Reason` do chan_sip
+  (`atendida_em_outro_ramal_nao_e_perdida`); sem o `Reason` continua perdida. Na janela, o mesmo PBX falso: aviso
+  "Ligação de Grupo atendida em outro ramal", a linha no histórico e "Perdidas" sem contar.
+- [x] Gravação: o motor entrega os dois lados juntos, a cada 20 ms (`a_gravacao_ouve_os_dois_lados_juntos`); o
+  arquivo tem o OpusHead, o título e a data, e o tempo exato no fim (`som/src/gravacao.rs`). Na janela, atendida na
+  tela e com 3 s de tom de 1 kHz pelo RTP do PBX falso: "● gravando" na ligação, `.opus` de 3,0 s que o ffmpeg
+  decodifica com o tom em 1000 Hz, e o "Ouvir" no histórico tocando dentro do app (no Linux o IPC entrega os bytes como
+  lista; no Windows, `ArrayBuffer`: a tela aceita os dois).
+- [x] Retenção na tela: escolher 30 dias com uma gravação de 40 pede "Apagar"; Cancelar não apaga nem salva; Apagar
+  apaga só ela e salva o prazo.
+- Revisão adversarial da retenção (27/11), corrigido: o desinstalador do Windows apagava a pasta local inteira, com as
+  gravações (agora só os ícones, e a pasta se ficar vazia); um campo ruim no `preferencias.toml` zerava todas as
+  preferências e a retenção caía nos 90 dias do padrão (agora cada campo vale sozinho, e a retenção só apaga com um
+  prazo salvo e válido); arquivo com data de antes do app gravar (relógio atrasado) nunca vence; "Ouvir" não segue
+  atalho nem abre FIFO; um atalho quebrado ocupa o nome de uma gravação nova; o nome só vale com data e hora possíveis.
+- [ ] No PBX: um grupo de ramais com o 4404 e outro aparelho, atendendo no outro. Pelo Asterisk, o `Reason` vem quando
+  o `Dial()` de vários ramais derruba os outros; numa fila, só com a opção `C` do `Queue()`.
+- [ ] Gravação numa ligação de verdade (as duas vozes, ouvir) e, no Windows, o "Ouvir" no WebView2 e o "Abrir" da
+  pasta.
 
 ## Próximos passos
 

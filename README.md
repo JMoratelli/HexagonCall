@@ -18,6 +18,8 @@ O núcleo foi testado contra um PBX de verdade (Asterisk 13 com chan_sip), e a j
 | Presença dos ramais (SUBSCRIBE/NOTIFY, PIDF do chan_sip), com renovação | ok no PBX |
 | Ligação de saída: toque, atendimento, CANCEL, motivo do fim (480, 486…) | ok no PBX, atendida com áudio nos dois sentidos |
 | Ligação de entrada: toque (180), atender, recusar (486), quem ligou desistiu | ok no PBX, atendida com áudio nos dois sentidos |
+| Atendida em outro ramal: o grupo de ramais ou a fila que tocou aqui e outro atendeu não vira perdida (o `Reason` do CANCEL, RFC 3326) | nos testes locais e na janela, com o CANCEL do chan_sip; falta conferir no PBX |
+| Gravação das ligações em Opus (as duas vozes, uns 5 MB por hora), com retenção e "Ouvir" no histórico | nos testes locais e na janela |
 | Renegociação no meio da ligação (re-INVITE, UPDATE) e espera (hold) | ok no PBX (re-INVITE); espera nos testes locais |
 | Áudio: G.711 (PCMA e PCMU), RTP, RTP simétrico, jitter que se ajusta à rede (Wi-Fi) | ok no PBX |
 | Microfone e alto-falante (cpal: ALSA/PipeWire no Linux, WASAPI no Windows), da placa a 48 kHz para os 8 kHz do telefone | ok no PBX, com headset |
@@ -38,7 +40,8 @@ Falta: cancelamento de eco (com caixa de som em vez de headset) e transferência
 ```
 nucleo/   lógica pura, sem rede nem som: contas, G.711, RTP, jitter, SDP, presença,
           o motivo de cada fim de ligação. Testado em qualquer lugar.
-som/      microfone e alto-falante: a placa de som vira Fonte e Destino do motor.
+som/      microfone e alto-falante: a placa de som vira Fonte e Destino do motor; a
+          gravação das ligações (Opus num arquivo .opus).
 motor/    o SIP (rsipstack) e o RTP de verdade. Uma conta, um Ua; quem usa chama os
           métodos (liga, atende, desliga, mensagem, assina_presenca) e escuta os eventos.
 bancada/  linha de comando para testar o motor contra um PBX, sem a janela.
@@ -78,6 +81,20 @@ chaveiro, para `senhas.toml`, que só o próprio usuário lê. "Sair", no menu d
 No Windows a ligação chegando aparece como toast com o nome e o ícone do app (o do flavor): o app registra o próprio
 AppUserModelID no HKCU ao abrir, e o instalador põe o mesmo no atalho do Menu Iniciar. O toast some quando a ligação é
 atendida ou acaba. Sem microfone ou sem alto-falante, a ligação segue em silêncio daquele lado, com o aviso na tela.
+
+A tela é só a do app: o menu do navegador (Inspecionar, Recarregar, Imprimir) e os atalhos dele (F5, Ctrl+R, Ctrl+P,
+Ctrl+F, o inspetor) ficam desligados; nos campos de texto o menu de copiar e colar continua.
+
+### Gravação
+
+Em Ajustes → Áudio → Gravação: "Gravar as ligações" grava cada ligação atendida, do atendimento ao fim, com as duas vozes
+misturadas em Opus (mono, 8 kHz, 12 kbit/s: uns 5 MB por hora) num arquivo `.opus` que toca no navegador, no VLC e no
+player do sistema. Os arquivos ficam em `~/.local/share/hexagon-call/gravacoes` (no Windows,
+`%LOCALAPPDATA%\hexagon-call\gravacoes`, a pasta local, que um perfil móvel do domínio não leva junto), com o nome
+`AAAA-MM-DD_HH-MM-SS_recebida_1002.opus`, e dentro do arquivo o título e a data. O histórico ganha o "Ouvir" na
+ligação gravada. "Guardar por" (7, 30 ou 90 dias, 1 ano ou sempre; 90 de padrão) apaga as mais antigas ao abrir e a
+cada 6 horas, só os arquivos com esse nome; escolher um prazo que apagaria alguma agora pede confirmação. A
+codificação roda numa thread própria: um disco lento não atrasa a ligação. Desinstalar não apaga as gravações.
 
 ## Pacotes e atualização
 

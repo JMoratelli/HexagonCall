@@ -219,6 +219,14 @@ fn exclui_historico(
     t.exclui_historico(&itens, gravacoes)
 }
 
+/// O nao perturbe, pelo botao do status (vale tambem com `ocultaConfig`: e de
+/// uso, nao de configuracao).
+#[tauri::command]
+fn nao_perturbe(t: Tel<'_>, sim: bool) -> Result<Estado, String> {
+    t.nao_perturbe(sim)?;
+    Ok(t.estado())
+}
+
 /// O nome de um ramal, dado em Ramais (vazio tira). Devolve todos.
 #[tauri::command]
 fn salva_nome(
@@ -633,6 +641,7 @@ fn main() -> std::process::ExitCode {
             salva_preferencias,
             exclui_historico,
             salva_nome,
+            nao_perturbe,
             gravacoes,
             gravacoes_mais_velhas,
             aplica_retencao,

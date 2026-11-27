@@ -92,6 +92,16 @@ O que está validado, o que falta e as decisões tomadas. Atualizar ao fim de ca
   trava, a conta parada se reconecta pelo próprio indicador (a tela Contas some). O completar roda depois da trava de
   instância única. Fica como está: mudar uma opção pela tela regrava o arquivo sem os comentários; com a trava, apagar
   gravações pelo histórico continua liberado (não foi pedido travar).
+- **Status e não perturbe** (pedido dele em 27/11): o indicador da conta, no alto, vira o botão do status. Abre
+  "Disponível" e "Não perturbe", a conexão de cada conta (com o Reconectar quando ela parou) e o atalho para Contas
+  (fora do `ocultaConfig`). No não perturbe, a ligação que chega é recusada como ocupado (486, o mesmo de quando já há
+  ligação): no grupo de ramais o PBX segue tocando nos outros, na fila passa para o próximo. Ela entra no histórico
+  como "Não perturbe" e conta em Perdidas, para retornar depois. O indicador fica vermelho, "1001 · não perturbe", e o
+  ponto ganha uma barrinha (que fica mesmo quando um problema da conta tem a vez no texto). Fica gravado
+  (`naoPerturbe`), muda só pelo botão (comando `nao_perturbe`, também com `ocultaConfig`, porque é de uso), e
+  `permitirNaoPerturbe = 0`, só pelo arquivo, tira a opção dos setores que não a teriam (o `naoPerturbe` gravado deixa
+  de valer). Os outros ramais não veem o não perturbe na presença: o chan_sip mostra o estado do aparelho, e o app
+  não publica presença.
 - **Release 1.0.0** (pedido dele em 27/11): sai com o que está pronto e validado no Linux e no Windows, antes da
   transferência com consulta, da outra ligação no meio de uma e do inglês, que entram nas próximas versões. O
   AppImageHub continua esperando o inglês.
@@ -289,6 +299,10 @@ aberto:
   a informação de atualização do GitHub.
 
 ## Validado em 27/11/2026 (testes locais e a janela num KWin virtual)
+
+- [x] Não perturbe, com um PBX falso que registra a conta e manda o INVITE: desligado, toca (180) e fica perdida;
+  ligado pelo botão do status, recusa na hora (486), "Não perturbe" no histórico e o indicador vermelho; com
+  `permitirNaoPerturbe = 0` e o `naoPerturbe = true` no arquivo, toca, e o botão mostra só a conexão.
 
 - [x] Toques fortes no grupo à parte; `ocultaConfig = 1` com conta (só Áudio, Aparência e Sobre; o "!" do Ajustes
   some, pois quem usa não tem o que fazer) e sem conta ("Nenhum ramal neste computador"); mudar o "Pausar música"

@@ -164,10 +164,10 @@ function renderChrome () {
   if (!c && oculta()) status = '<span class="status" style="--c:var(--warn);cursor:default" title="Nenhum ramal neste computador: fale com o administrador"><span class="dot"></span>Sem conta</span>'
   else if (!c) status = '<button type="button" class="status" style="--c:var(--warn)" data-act="nova-conta" title="Cadastre o seu ramal"><span class="dot"></span>Sem conta</button>'
   else {
-    const [t, cor] = estadoConta(c), curto = curtoConta(c)
-    // Com ocultaConfig nao ha a tela Contas: a conta parada se reconecta pelo proprio indicador.
-    const religa = oculta() && ['falhou', 'parada', 'sem-senha'].includes(c.registro)
-    status = '<button type="button" class="status" style="--c:' + cor + '" ' + (religa ? 'data-act="reconecta" data-v="' + esc(c.id) + '"' : 'data-act="go" data-v="ajustes"') + ' title="' + esc([c.id, t + (c.detalhe ? ': ' + c.detalhe : ''), pbxTexto(c), religa ? 'clique para reconectar' : ''].filter(Boolean).join(' · ')) + '"><span class="dot"></span>' + esc(c.usuario) + (curto ? ' · ' + curto : '') + (state.contas.length > 1 ? ' +' + (state.contas.length - 1) : '') + '</button>'
+    // O botao do status (27/11) abre o Disponivel/Nao perturbe, a conexao de cada conta e o Reconectar. Um problema
+    // da conta tem a vez no texto; o nao perturbe fica sempre na barrinha do ponto.
+    const [t, cor] = estadoConta(c), curto = curtoConta(c), dnd = emNaoPerturbe()
+    status = '<button type="button" class="status" style="--c:' + (dnd && !curto ? 'var(--crit)' : cor) + '" data-act="status" data-pop aria-haspopup="dialog" aria-expanded="false" title="' + esc([c.id, t + (c.detalhe ? ': ' + c.detalhe : ''), pbxTexto(c), dnd ? 'não perturbe' : ''].filter(Boolean).join(' · ')) + '"><span class="dot' + (dnd ? ' dnd' : '') + '"></span>' + esc(c.usuario) + (curto ? ' · ' + curto : dnd ? ' · não perturbe' : '') + (state.contas.length > 1 ? ' +' + (state.contas.length - 1) : '') + '</button>'
   }
   // A barra de cima e a da janela: marca, conta e os botoes (arrasta pelo vazio).
   $('#abar').innerHTML = '<span class="brand" data-tauri-drag-region>' + MARK + '<span>' + brandName() + '</span></span>' + status +
@@ -315,9 +315,10 @@ function incomingPanel (c) {
 // "Atendida em outro ramal" o de quando tocou aqui e em outros aparelhos (grupo, fila) e outro atendeu.
 const transferida = h => h.fim === 'Ligação transferida'
 const emOutroRamal = h => h.fim === 'Atendida em outro ramal'
+const peloNaoPerturbe = h => h.fim === 'Não perturbe'
 const perdida = h => h.entrada && !h.atendida && !emOutroRamal(h)
 function histTipo (h) {
-  if (perdida(h)) return h.fim === 'Ligação recusada' ? 'Recusada' : 'Perdida'
+  if (perdida(h)) return h.fim === 'Ligação recusada' ? 'Recusada' : peloNaoPerturbe(h) ? 'Não perturbe' : 'Perdida'
   if (emOutroRamal(h)) return 'Atendida em outro ramal'
   if (!h.atendida) return 'Não completada'
   if (transferida(h)) return 'Transferida'
@@ -507,6 +508,24 @@ const SECOES = [['contas', 'Contas', 'user'], ['audio', 'Áudio', 'mic'], ['toqu
 // ocultaConfig = 1 no preferencias.toml (27/11, para instalar em massa): Contas, Toques e sons e Janela somem, e em
 // Audio fica so o primeiro bloco. Quem administra muda o resto no arquivo (o Rust tambem recusa pela tela).
 const oculta = () => !!state.prefs.ocultaConfig
+// Nao perturbe (27/11): recusa as ligacoes que chegam como ocupado. permitirNaoPerturbe = 0 no arquivo tira a opcao.
+const podeNaoPerturbe = () => state.prefs.permitirNaoPerturbe !== false
+const emNaoPerturbe = () => !!state.prefs.naoPerturbe && podeNaoPerturbe()
+function statusHTML () {
+  const dnd = emNaoPerturbe()
+  const opcao = (v, nome, sub, cor, sim) => '<button type="button" class="opt" role="radio" aria-checked="' + sim + '" data-act="dnd" data-v="' + v + '"><span class="ck">' + ic('check') + '</span><span class="nm">' + nome + '<small class="bl">' + sub + '</small></span><span class="dot' + (v === '1' ? ' dnd' : '') + '" style="--c:' + cor + '"></span></button>'
+  const contas = state.contas.map(c => {
+    const [t, cor] = estadoConta(c), extra = [c.detalhe, pbxTexto(c)].filter(Boolean).join(' · ')
+    const religa = ['falhou', 'parada', 'sem-senha'].includes(c.registro) || reconectando(c)
+    return '<div class="pop-conta"><span class="dot" style="--c:' + cor + '"></span><div class="tx"><b>' + esc(c.usuario) + (c.nome ? ' · ' + esc(c.nome) : '') + '</b><small>' + t + (extra ? ' · ' + esc(extra) : '') + '</small></div>' +
+      (religa ? '<button type="button" class="btn sm" data-act="reconecta" data-v="' + esc(c.id) + '">Reconectar</button>' : '') + '</div>'
+  }).join('')
+  return (podeNaoPerturbe()
+    ? '<div class="pop-title">Status</div><div role="radiogroup" aria-label="Status">' + opcao('0', 'Disponível', 'Recebe as ligações.', 'var(--ok)', !dnd) +
+      opcao('1', 'Não perturbe', 'Recusa as ligações como ocupado; elas ficam no histórico.', 'var(--crit)', dnd) + '</div><div class="pop-sep"></div>'
+    : '<div class="pop-title">Conexão</div>') +
+    contas + (oculta() ? '' : '<div class="pop-acoes"><button type="button" class="btn sm" data-act="pop-contas">' + ic('user') + 'Contas</button></div>')
+}
 const secoesVistas = () => oculta() ? SECOES.filter(s => ['audio', 'aparencia', 'sobre'].includes(s[0])) : SECOES
 const item = (b, small, vl) => '<div class="item"><div class="lb"><b>' + b + '</b>' + (small ? '<small>' + small + '</small>' : '') + '</div><div class="vl">' + vl + '</div></div>'
 const grupo = (titulo, itens) => (titulo ? '<div class="grupo-titulo">' + titulo + '</div>' : '') + '<div class="grupo">' + itens + '</div>'
@@ -831,7 +850,7 @@ function recebe (a) {
       if (daChamada(a.id)) { const era = state.call.kind; paraSom(); state.call = null; if (era !== 'incoming') SONS.fim() }
       const d = pessoa(a.item.ramal)
       if (perdida(a.item) && state.view !== 'chamadas') state.missedNew++
-      toast(perdida(a.item) ? 'Ligação perdida de ' + d.n + '.' : emOutroRamal(a.item) ? 'Ligação de ' + d.n + ' atendida em outro ramal.' : transferida(a.item) ? 'Ligação transferida · ' + fmt(a.item.duracao) : a.item.atendida ? 'Ligação encerrada · ' + fmt(a.item.duracao) : a.item.fim)
+      toast(peloNaoPerturbe(a.item) ? 'Ligação de ' + d.n + ' recusada: não perturbe.' : perdida(a.item) ? 'Ligação perdida de ' + d.n + '.' : emOutroRamal(a.item) ? 'Ligação de ' + d.n + ' atendida em outro ramal.' : transferida(a.item) ? 'Ligação transferida · ' + fmt(a.item.duracao) : a.item.atendida ? 'Ligação encerrada · ' + fmt(a.item.duracao) : a.item.fim)
       refresh()
       break
     }
@@ -1018,7 +1037,7 @@ document.addEventListener('click', async e => {
       try { await invoke('testa_microfone', { microfone: state.prefs.microfone || null }) } catch (err) { state.testeMic = null; toast('Não testei: ' + erroDe(err)); renderView() }
       break
     case 'para-mic': invoke('para_teste_microfone').catch(() => {}); break
-    case 'reconecta': b.disabled = true; if (await acao('reconecta', { id: v }, 'Não reconectei')) toast('Conectando de novo ao PBX…'); break
+    case 'reconecta': b.disabled = true; if (b.closest('#pop')) closePop(); if (await acao('reconecta', { id: v }, 'Não reconectei')) toast('Conectando de novo ao PBX…'); break
     case 'remove-confirma':
       try { aplica(await invoke('remove_conta', { id: v })); toast('Conta removida.') } catch (err) { toast('Não removi: ' + erroDe(err)) }
       state.remover = null; refresh(); break
@@ -1104,6 +1123,13 @@ document.addEventListener('click', async e => {
     case 'toque': state.prefs.toque = v; salvaPrefs(); renderView(); break
     case 'minimizar': janela.minimize(); break
     case 'fechar': janela.close(); break
+    case 'status': openPop(b, statusHTML(), 'status'); break
+    case 'dnd': {
+      closePop()
+      try { aplica(await invoke('nao_perturbe', { sim: v === '1' })); refresh(); toast(v === '1' ? 'Não perturbe: as ligações serão recusadas.' : 'Disponível: as ligações voltam a tocar.') } catch (err) { toast('Não mudei: ' + erroDe(err)) }
+      break
+    }
+    case 'pop-contas': closePop(); state.secao = 'contas'; go('ajustes'); break
     case 'pick-conta': {
       const atual = contaDaLigacao()
       openPop(b, '<div class="pop-title">Ligar por</div><div role="radiogroup">' + state.contas.map(c => {

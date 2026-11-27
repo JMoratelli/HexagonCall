@@ -150,6 +150,15 @@ pub struct Preferencias {
     /// outros dois: pedido de 27/11).
     #[serde(deserialize_with = "bool_ou_numero::sim_ou_nao")]
     pub voz_nitida: bool,
+    /// Nao perturbe (pedido de 27/11): as ligacoes que chegam sao recusadas
+    /// como ocupado (486) e ficam no historico. Muda pelo botao do status (o
+    /// comando `nao_perturbe`), nao pelas preferencias da tela.
+    #[serde(deserialize_with = "bool_ou_numero::sim_ou_nao")]
+    pub nao_perturbe: bool,
+    /// So pelo arquivo: `permitirNaoPerturbe = 0` tira a opcao, para os
+    /// setores que nao a teriam.
+    #[serde(deserialize_with = "bool_ou_numero::sim_ou_nao")]
+    pub permitir_nao_perturbe: bool,
     /// So pelo arquivo (pedido de 27/11, para instalar em massa):
     /// `ocultaConfig = 1` tira da tela Contas, Toques e sons, Janela e, em
     /// Audio, tudo menos o primeiro bloco. O resto, quem administra muda aqui.
@@ -226,10 +235,15 @@ mod trava {
 }
 
 impl Preferencias {
+    /// O nao perturbe vale: ligado e permitido.
+    pub const fn em_nao_perturbe(&self) -> bool {
+        self.nao_perturbe && self.permitir_nao_perturbe
+    }
+
     /// As preferencias que a tela mandou, depois de tirar o que ela nao muda:
-    /// o flavor, o `ocultaConfig` e o abrir com o sistema ficam como estao no
-    /// arquivo; com `ocultaConfig`, so vale o que a tela mostra (o tema e o
-    /// primeiro bloco de Audio).
+    /// o flavor, o `ocultaConfig`, o abrir com o sistema e o nao perturbe (que
+    /// tem comando proprio) ficam como estao no arquivo; com `ocultaConfig`, so
+    /// vale o que a tela mostra (o tema e o primeiro bloco de Audio).
     pub fn com_o_que_a_tela_muda(&self, tela: Self) -> Self {
         if self.oculta_config {
             Self {
@@ -244,6 +258,8 @@ impl Preferencias {
                 flavor: self.flavor,
                 oculta_config: false,
                 abrir_com_o_sistema: self.abrir_com_o_sistema,
+                nao_perturbe: self.nao_perturbe,
+                permitir_nao_perturbe: self.permitir_nao_perturbe,
                 ..tela
             }
         }
@@ -269,6 +285,8 @@ impl Default for Preferencias {
             cancelar_eco: true,
             reduzir_ruido: true,
             voz_nitida: true,
+            nao_perturbe: false,
+            permitir_nao_perturbe: true,
             oculta_config: false,
             abrir_com_o_sistema: None,
         }
@@ -1032,6 +1050,8 @@ mod testes {
             cancelar_eco: false,
             reduzir_ruido: true,
             voz_nitida: true,
+            nao_perturbe: true,
+            permitir_nao_perturbe: false,
             oculta_config: true,
             abrir_com_o_sistema: Some(true),
         };
@@ -1148,6 +1168,8 @@ mod testes {
             trazer_para_frente: false,
             oculta_config: false,
             abrir_com_o_sistema: Some(false),
+            nao_perturbe: true,
+            permitir_nao_perturbe: false,
             ..Preferencias::default()
         };
         let p = arquivo.com_o_que_a_tela_muda(tela.clone());
@@ -1161,7 +1183,8 @@ mod testes {
                 ..arquivo.clone()
             }
         );
-        // Sem ocultaConfig, a tela muda tudo menos o que e so do arquivo.
+        // Sem ocultaConfig, a tela muda tudo menos o que e so do arquivo (e o
+        // nao perturbe, que tem comando proprio).
         let livre = Preferencias {
             oculta_config: false,
             ..arquivo
@@ -1172,6 +1195,8 @@ mod testes {
             Preferencias {
                 flavor: Flavor::Hexagon,
                 abrir_com_o_sistema: Some(true),
+                nao_perturbe: false,
+                permitir_nao_perturbe: true,
                 ..tela
             }
         );

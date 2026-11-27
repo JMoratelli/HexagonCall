@@ -146,7 +146,14 @@ struct Chamada {
     gravacao: Option<String>,
     /// A referencia do eco desta ligacao (o microfone trocado usa a mesma).
     referencia: Option<som::eco::Referencia>,
+    /// O fim que o app decidiu (recusada pelo nao perturbe), no lugar do texto
+    /// do motor no historico.
+    motivo: Option<&'static str>,
 }
+
+/// O fim no historico de uma ligacao recusada pelo nao perturbe (a tela
+/// reconhece por este texto).
+const FIM_NAO_PERTURBE: &str = "Não perturbe";
 
 /// Uma conta como a tela mostra.
 #[derive(Debug, Clone, Serialize)]
@@ -964,7 +971,7 @@ impl Telefone {
                         nome: c.nome,
                         atendida: c.atendida,
                         duracao: c.atendida_em.map_or(0, |t| agora().saturating_sub(t)),
-                        fim: fim.texto().to_string(),
+                        fim: c.motivo.map_or_else(|| fim.texto(), str::to_string),
                         gravacao: c.gravacao,
                     };
                     if let Err(e) = self.guarda.acrescenta_historico(&item) {
@@ -1115,6 +1122,19 @@ impl Telefone {
         Ok(())
     }
 
+    /// Liga ou desliga o nao perturbe. Com `permitirNaoPerturbe = 0` no
+    /// arquivo, nao liga.
+    pub fn nao_perturbe(&self, sim: bool) -> Result<(), String> {
+        let mut p = self.guarda.preferencias_lidas()?;
+        if sim && !p.permitir_nao_perturbe {
+            return Err("Neste computador, o não perturbe não está disponível.".into());
+        }
+        p.nao_perturbe = sim;
+        self.guarda.grava_preferencias(&p)?;
+        info!(sim, "nao perturbe");
+        Ok(())
+    }
+
     pub fn para_teste_microfone(&self) {
         self.testando
             .store(false, std::sync::atomic::Ordering::SeqCst);
@@ -1137,16 +1157,25 @@ impl Telefone {
                 faltando: Faltando::default(),
                 gravacao: None,
                 referencia: None,
+                motivo: None,
             },
         );
-        if ocupado {
-            info!(%id, "ja tem ligacao: recusando a que chegou");
+        let preferencias = self.guarda.preferencias();
+        let nao_perturbe = !ocupado && preferencias.em_nao_perturbe();
+        if ocupado || nao_perturbe {
+            if nao_perturbe {
+                info!(%id, "nao perturbe: recusando a que chegou");
+                if let Some(c) = trava(&self.chamadas).get_mut(&id) {
+                    c.motivo = Some(FIM_NAO_PERTURBE);
+                }
+            } else {
+                info!(%id, "ja tem ligacao: recusando a que chegou");
+            }
             if let Some(ua) = self.ua_da_conta(conta) {
                 let _ = ua.desliga(&id).await;
             }
             return;
         }
-        let preferencias = self.guarda.preferencias();
         if preferencias.trazer_para_frente {
             crate::mostra(&self.app);
         }
@@ -1354,6 +1383,7 @@ impl Telefone {
                 faltando: a.faltando,
                 gravacao: None,
                 referencia: Some(a.referencia),
+                motivo: None,
             },
         );
         Ok(id)

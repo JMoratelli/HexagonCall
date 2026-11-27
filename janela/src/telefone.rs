@@ -200,6 +200,7 @@ pub struct Alternativa {
 pub struct ToqueVista {
     pub id: &'static str,
     pub nome: &'static str,
+    pub forte: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -210,6 +211,9 @@ pub struct Estado {
     pub historico: Vec<ItemHistorico>,
     pub conversas: Vec<ItemConversa>,
     pub preferencias: Preferencias,
+    /// O arquivo de preferencias existe e nao abre: o motivo, para a tela
+    /// mostrar (ai a trava fica ligada e nada se grava por cima).
+    pub erro_preferencias: Option<String>,
     pub tem_chaveiro: bool,
     pub pasta: String,
     pub toques: Vec<ToqueVista>,
@@ -608,6 +612,7 @@ impl Telefone {
     }
 
     pub fn estado(&self) -> Estado {
+        let (preferencias, erro_preferencias) = self.guarda.preferencias_e_erro();
         let chamada = trava(&self.chamadas)
             .iter()
             .next()
@@ -626,7 +631,8 @@ impl Telefone {
             chamada,
             historico: self.historico(),
             conversas: self.guarda.conversas(),
-            preferencias: self.guarda.preferencias(),
+            preferencias,
+            erro_preferencias,
             apelidos: self.guarda.nomes(),
             presencas: trava(&self.presencas)
                 .iter()
@@ -639,6 +645,7 @@ impl Telefone {
                 .map(|t| ToqueVista {
                     id: t.id,
                     nome: t.nome,
+                    forte: t.forte,
                 })
                 .collect(),
         }
@@ -1316,7 +1323,7 @@ impl Telefone {
                 alto_falante,
             });
         }
-        let mut p = self.guarda.preferencias();
+        let mut p = self.guarda.preferencias_lidas()?;
         p.microfone = microfone;
         self.guarda.grava_preferencias(&p)
     }

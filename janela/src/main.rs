@@ -102,8 +102,11 @@ async fn espera(t: Tel<'_>, id: String, sim: bool) -> Result<(), String> {
 /// desliga (`Some(false)`) ou so diz como esta (`None`). Quem guarda e o
 /// sistema (a pasta de inicio do KDE, o Run do Windows).
 #[tauri::command]
-fn abrir_com_o_sistema(app: AppHandle, sim: Option<bool>) -> Result<bool, String> {
+fn abrir_com_o_sistema(app: AppHandle, t: Tel<'_>, sim: Option<bool>) -> Result<bool, String> {
     use tauri_plugin_autostart::ManagerExt;
+    if sim.is_some() {
+        so_sem_administrador(&t)?;
+    }
     let auto = app.autolaunch();
     match sim {
         Some(true) => auto.enable().map_err(|e| e.to_string())?,
@@ -159,8 +162,18 @@ async fn mensagem(
     t.mensagem(destino.trim(), &texto, conta.as_deref()).await
 }
 
+/// Com `ocultaConfig` no arquivo, as contas e o que a tela esconde sao de quem
+/// administra: a tela nao muda, nem chamando o comando direto.
+fn so_sem_administrador(t: &Telefone) -> Result<(), String> {
+    if t.guarda().preferencias().oculta_config {
+        return Err("Neste computador, isso é definido pelo administrador.".into());
+    }
+    Ok(())
+}
+
 #[tauri::command]
 async fn salva_conta(t: Tel<'_>, conta: FormConta) -> Result<Estado, String> {
+    so_sem_administrador(&t)?;
     let tel = Arc::clone(&t);
     tel.salva_conta(conta).await?;
     Ok(tel.estado())
@@ -174,14 +187,20 @@ async fn reconecta(t: Tel<'_>, id: String) -> Result<(), String> {
 
 #[tauri::command]
 async fn remove_conta(t: Tel<'_>, id: String) -> Result<Estado, String> {
+    so_sem_administrador(&t)?;
     t.remove_conta(&id).await?;
     Ok(t.estado())
 }
 
 #[tauri::command]
-fn salva_preferencias(app: AppHandle, t: Tel<'_>, mut p: Preferencias) -> Result<(), String> {
-    // O flavor so muda pelo arquivo: o que a tela manda nao vale.
-    p.flavor = t.guarda().preferencias().flavor;
+fn salva_preferencias(app: AppHandle, t: Tel<'_>, p: Preferencias) -> Result<(), String> {
+    // O flavor e o que quem administra decide so mudam pelo arquivo.
+    // Um arquivo que nao abre (de quem administra, com um erro) nao se grava por cima.
+    let p = t
+        .guarda()
+        .preferencias_lidas()
+        .map_err(|e| format!("o arquivo de preferências tem um erro; corrija ou apague: {e}"))?
+        .com_o_que_a_tela_muda(p);
     t.guarda().grava_preferencias(&p)?;
     if let Some(w) = app.get_webview_window("principal") {
         let _ = w.set_title(titulo(p.flavor));
@@ -520,7 +539,11 @@ fn main() -> std::process::ExitCode {
         }
     };
     let na_bandeja = std::env::args().any(|a| a == "--bandeja");
-    let flavor = guarda.preferencias().flavor;
+    let preferencias = guarda.preferencias();
+    let flavor = preferencias.flavor;
+    let abrir_pelo_arquivo = preferencias
+        .abrir_com_o_sistema
+        .filter(|_| preferencias.oculta_config);
     let mut guarda = Some(guarda);
 
     let resultado = tauri::Builder::default()
@@ -535,18 +558,31 @@ fn main() -> std::process::ExitCode {
             let Some(guarda) = guarda.take() else {
                 return Ok(());
             };
+            // O arquivo de preferencias com todas as chaves (o `ocultaConfig = 0`):
+            // quem administra ve o que pode mudar. Aqui, e nao no main: a segunda
+            // instancia ja saiu, e nao grava junto com a primeira.
+            if let Err(e) = guarda.completa_preferencias() {
+                warn!("completar as preferencias: {e}");
+            }
             let telefone = Telefone::novo(app.handle().clone(), guarda);
             app.manage(Arc::clone(&telefone));
             app.manage(Atualizacao::default());
             // Abrir com o sistema guarda o caminho do exe: depois de mudar de
             // lugar (do exe solto para o instalado, numa atualizacao), o
-            // caminho velho abriria a versao antiga no proximo login.
+            // caminho velho abriria a versao antiga no proximo login. Com
+            // `ocultaConfig`, o arquivo pode mandar ligar ou desligar.
             {
                 use tauri_plugin_autostart::ManagerExt;
                 let auto = app.autolaunch();
-                if auto.is_enabled().unwrap_or(false)
-                    && let Err(e) = auto.enable()
-                {
+                let ligado = auto.is_enabled().unwrap_or(false);
+                let r = if abrir_pelo_arquivo.unwrap_or(ligado) {
+                    auto.enable()
+                } else if ligado {
+                    auto.disable()
+                } else {
+                    Ok(())
+                };
+                if let Err(e) = r {
                     warn!("atualizar o abrir com o sistema: {e}");
                 }
             }

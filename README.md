@@ -41,7 +41,8 @@ O núcleo foi testado contra um PBX de verdade (Asterisk 13 com chan_sip), e a j
 | Janela: cadastro de conta, discar, atender, mudo, espera, mensagens, últimas chamadas, bandeja, moldura própria | em uso no PBX |
 | Ligação chegando na notificação do sistema (Atender, Recusar), sons, aviso de microfone sem som | na janela |
 | Tons do teclado na ligação (DTMF, RFC 4733) e transferência (REFER) | nos testes locais |
-| Toques de entrada (cinco), tocar em todos os alto-falantes no volume máximo, abrir com o sistema | na janela |
+| Toques de entrada (cinco discretos e três fortes, para sala com barulho), tocar em todos os alto-falantes no volume máximo, abrir com o sistema | na janela |
+| Instalação em massa: `ocultaConfig = 1` tira da tela as contas e quase todas as opções, que vêm dos arquivos | na janela |
 | Instalador do Windows e atualização sozinha (releases do GitHub, conferida por sha256) | testado no Windows 10 |
 | AppImage do Linux e atualização sozinha (a mesma release, conferida por sha256), atalho no menu | testada no CachyOS (AppImage do Ubuntu 22.04) |
 
@@ -90,6 +91,27 @@ Na primeira vez, abre no cadastro de conta. Os dados ficam em texto, no estilo d
 (no Windows, `%APPDATA%\hexagon-call`): `contas.toml`, `preferencias.toml`, `historico.txt` e `conversas.txt`. A senha
 vai para o chaveiro do sistema (KWallet ou GNOME Keyring; Gerenciador de Credenciais no Windows) e, numa máquina sem
 chaveiro, para `senhas.toml`, que só o próprio usuário lê. "Sair", no menu da bandeja, desregistra as contas.
+
+### Instalar em vários computadores
+
+Para quem administra muitos computadores (um callcenter, por exemplo), o `preferencias.toml` tem a chave
+`ocultaConfig`, que só muda no arquivo. Com `ocultaConfig = 1`, a tela esconde Contas, Toques e sons e Janela, e em
+Áudio mostra só o primeiro bloco (microfone, alto-falante, pausar música). O resto vem dos arquivos, e a tela não muda.
+Na pasta do usuário (`~/.config/hexagon-call`; no Windows, `%APPDATA%\hexagon-call`):
+
+- `contas.toml`: um `[[conta]]` por ramal, com `usuario`, `dominio` e, se quiser, `nome` e `porta`;
+- `senhas.toml`: a senha de cada conta, em `[senhas]`, como `"1001@pbx.exemplo.com.br" = "..."`, legível só pelo
+  usuário. O app procura a senha no chaveiro e, se não achar, neste arquivo;
+- `preferencias.toml`: `ocultaConfig = 1` e o que mais quiser, como `toque = "alerta"`, `toqueNoMaximo = 1` ou
+  `gravar = 1` (as opções de ligar e desligar aceitam `0`/`1` e `false`/`true`). Com `ocultaConfig`,
+  `abrirComOSistema = 1` liga o abrir com o sistema a cada vez que o app abre, e `0` desliga.
+
+Os três podem ser gravados em UTF-8 ou em UTF-16 (o `Out-File` do PowerShell). Ao abrir, o app acrescenta no fim do
+`preferencias.toml` as chaves que faltam, no valor padrão (`ocultaConfig = 0`), para mostrar o que dá para mudar; só
+`microfone`, `altoFalante` e `abrirComOSistema` ficam de fora quando não têm valor. O que já estava escrito fica como
+estava, mas mudar o microfone ou o tema pela tela regrava o arquivo sem os comentários. Na trava, só `0` ou `false`
+destravam: um valor que não vale trava. E um `preferencias.toml` com erro (um texto sem aspas, por exemplo) deixa a
+tela travada, mostra o erro em Áudio e não é regravado até ser corrigido.
 
 No Windows a ligação chegando aparece como toast com o nome e o ícone do app (o do flavor): o app registra o próprio
 AppUserModelID no HKCU ao abrir, e o instalador põe o mesmo no atalho do Menu Iniciar. O toast some quando a ligação é

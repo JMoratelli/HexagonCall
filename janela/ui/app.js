@@ -161,10 +161,13 @@ function renderChrome () {
   const unread = Object.values(state.naoLidas).reduce((a, b) => a + b, 0)
   const c = contaPrincipal()
   let status
-  if (!c) status = '<button type="button" class="status" style="--c:var(--warn)" data-act="nova-conta" title="Cadastre o seu ramal"><span class="dot"></span>Sem conta</button>'
+  if (!c && oculta()) status = '<span class="status" style="--c:var(--warn);cursor:default" title="Nenhum ramal neste computador: fale com o administrador"><span class="dot"></span>Sem conta</span>'
+  else if (!c) status = '<button type="button" class="status" style="--c:var(--warn)" data-act="nova-conta" title="Cadastre o seu ramal"><span class="dot"></span>Sem conta</button>'
   else {
     const [t, cor] = estadoConta(c), curto = curtoConta(c)
-    status = '<button type="button" class="status" style="--c:' + cor + '" data-act="go" data-v="ajustes" title="' + esc([c.id, t + (c.detalhe ? ': ' + c.detalhe : ''), pbxTexto(c)].filter(Boolean).join(' · ')) + '"><span class="dot"></span>' + esc(c.usuario) + (curto ? ' · ' + curto : '') + (state.contas.length > 1 ? ' +' + (state.contas.length - 1) : '') + '</button>'
+    // Com ocultaConfig nao ha a tela Contas: a conta parada se reconecta pelo proprio indicador.
+    const religa = oculta() && ['falhou', 'parada', 'sem-senha'].includes(c.registro)
+    status = '<button type="button" class="status" style="--c:' + cor + '" ' + (religa ? 'data-act="reconecta" data-v="' + esc(c.id) + '"' : 'data-act="go" data-v="ajustes"') + ' title="' + esc([c.id, t + (c.detalhe ? ': ' + c.detalhe : ''), pbxTexto(c), religa ? 'clique para reconectar' : ''].filter(Boolean).join(' · ')) + '"><span class="dot"></span>' + esc(c.usuario) + (curto ? ' · ' + curto : '') + (state.contas.length > 1 ? ' +' + (state.contas.length - 1) : '') + '</button>'
   }
   // A barra de cima e a da janela: marca, conta e os botoes (arrasta pelo vazio).
   $('#abar').innerHTML = '<span class="brand" data-tauri-drag-region>' + MARK + '<span>' + brandName() + '</span></span>' + status +
@@ -174,7 +177,7 @@ function renderChrome () {
   const botao = (v, label, icone, n, tom) => '<button type="button" data-act="go" data-v="' + v + '"' + (state.view === v ? ' aria-current="page"' : '') + ' title="' + label + '">' +
     '<span class="icone">' + ic(icone) + (n ? '<span class="n" style="--c:' + tom + '">' + n + '</span>' : '') + '</span><span>' + label + '</span></button>'
   $('#rail').innerHTML = botao('chamadas', 'Chamadas', 'phone', state.missedNew, 'var(--crit)') + botao('conversas', 'Conversas', 'chat', unread, 'var(--primary)') + botao('ramais', 'Ramais', 'users') +
-    '<span class="espaco"></span>' + botao('ajustes', 'Ajustes', 'gear', contaComProblema() ? '!' : 0, 'var(--warn)')
+    '<span class="espaco"></span>' + botao('ajustes', 'Ajustes', 'gear', contaComProblema() && !oculta() ? '!' : 0, 'var(--warn)')
 }
 
 // ---- A faixa da ligacao (nas abas que nao sao Chamadas) ----
@@ -201,6 +204,11 @@ function renderStrip () {
 // ---- Chamadas ----
 function renderChamadas () {
   state.missedNew = 0
+  if (!state.contas.length && oculta()) {
+    $('#content').innerHTML = '<div class="boasvindas"><div class="lattice" aria-hidden="true"></div><span class="marca">' + MARK + '</span><h2>Nenhum ramal neste computador</h2>' +
+      '<p>O ramal deste computador é configurado pelo administrador. Fale com ele.</p></div>'
+    return
+  }
   if (!state.contas.length) {
     $('#content').innerHTML = '<div class="boasvindas"><div class="lattice" aria-hidden="true"></div><span class="marca">' + MARK + '</span><h2>Cadastre o seu ramal para começar</h2>' +
       '<p>O ramal, o servidor do PBX e a senha. A senha fica no chaveiro do sistema' + (state.temChaveiro ? '' : ' (nesta máquina não há chaveiro: ela fica num arquivo só seu)') + '.</p>' +
@@ -496,19 +504,24 @@ function formHTML () {
     '<div class="acoes"><button type="button" class="btn" data-act="form-cancela">Cancelar</button><button type="submit" class="btn prim"' + (f.salvando ? ' disabled' : '') + '>' + (f.salvando ? 'Salvando…' : 'Salvar') + '</button></div></form>'
 }
 const SECOES = [['contas', 'Contas', 'user'], ['audio', 'Áudio', 'mic'], ['toques', 'Toques e sons', 'bell'], ['aparencia', 'Aparência', 'sun'], ['janela', 'Janela', 'janela'], ['sobre', 'Sobre', 'info']]
+// ocultaConfig = 1 no preferencias.toml (27/11, para instalar em massa): Contas, Toques e sons e Janela somem, e em
+// Audio fica so o primeiro bloco. Quem administra muda o resto no arquivo (o Rust tambem recusa pela tela).
+const oculta = () => !!state.prefs.ocultaConfig
+const secoesVistas = () => oculta() ? SECOES.filter(s => ['audio', 'aparencia', 'sobre'].includes(s[0])) : SECOES
 const item = (b, small, vl) => '<div class="item"><div class="lb"><b>' + b + '</b>' + (small ? '<small>' + small + '</small>' : '') + '</div><div class="vl">' + vl + '</div></div>'
 const grupo = (titulo, itens) => (titulo ? '<div class="grupo-titulo">' + titulo + '</div>' : '') + '<div class="grupo">' + itens + '</div>'
 const cabeca = (titulo, texto) => '<header class="cfghead"><h2>' + titulo + '</h2>' + (texto ? '<p>' + texto + '</p>' : '') + '</header>'
 const msegHTML = (act, atual, opcoes, rotulo) => '<div class="mseg" role="group" aria-label="' + rotulo + '">' + opcoes.map(([v, l]) => '<button type="button" data-act="' + act + '" data-v="' + v + '" aria-pressed="' + (atual === v) + '">' + l + '</button>').join('') + '</div>'
 const contaComProblema = () => state.contas.some(c => c.registro === 'falhou' || c.registro === 'sem-senha')
 function renderAjustes () {
-  const sec = state.secao || 'contas'
+  const vistas = secoesVistas()
+  const sec = state.secao = vistas.some(s => s[0] === state.secao) ? state.secao : vistas[0][0]
   const secoes = { contas: secContas, audio: secAudio, toques: secToques, aparencia: secAparencia, janela: secJanela, sobre: secSobre }
   // Redesenhar a mesma secao (um botao la embaixo) nao volta para o topo.
   const antes = $('#cfgpane'), rolagem = antes && antes.dataset.sec === sec ? antes.scrollTop : 0
   $('#content').innerHTML = '<div class="cfg"><nav class="cfgnav" aria-label="Seções das configurações">' +
-    SECOES.map(([v, l, i]) => '<button type="button" data-act="secao" data-v="' + v + '"' + (sec === v ? ' aria-current="page"' : '') + '>' + ic(i) + '<span>' + l + '</span>' + (v === 'contas' && contaComProblema() ? '<span class="dot" style="--c:var(--warn)" title="Conta com problema"></span>' : '') + '</button>').join('') +
-    '</nav><section class="cfgpane" id="cfgpane" data-sec="' + sec + '" aria-label="' + esc((SECOES.find(x => x[0] === sec) || SECOES[0])[1]) + '">' + (secoes[sec] || secContas)() + '</section></div>'
+    vistas.map(([v, l, i]) => '<button type="button" data-act="secao" data-v="' + v + '"' + (sec === v ? ' aria-current="page"' : '') + '>' + ic(i) + '<span>' + l + '</span>' + (v === 'contas' && contaComProblema() ? '<span class="dot" style="--c:var(--warn)" title="Conta com problema"></span>' : '') + '</button>').join('') +
+    '</nav><section class="cfgpane" id="cfgpane" data-sec="' + sec + '" aria-label="' + esc(vistas.find(x => x[0] === sec)[1]) + '">' + secoes[sec]() + '</section></div>'
   $('#cfgpane').scrollTop = rolagem
 }
 function secContas () {
@@ -538,13 +551,16 @@ function secAudio () {
   const teste = t
     ? '<div class="medidor" aria-hidden="true"><span id="medidor-barra"></span></div><span class="tab muted" id="medidor-db">…</span><button type="button" class="btn sm" data-act="para-mic">Parar</button>'
     : '<button type="button" class="btn sm" data-act="testa-mic">' + ic('mic') + 'Testar microfone</button>'
-  return cabeca('Áudio', 'Por onde você fala e ouve nas ligações. "Padrão do sistema" segue o que está escolhido no computador.') +
+  const inicio = cabeca('Áudio', 'Por onde você fala e ouve nas ligações. "Padrão do sistema" segue o que está escolhido no computador.') +
     (state.devErro ? '<div class="erro" role="alert">' + esc(state.devErro) + '</div>' : '') +
     grupo('', item('Microfone', 'O que vai para o outro lado.', pick('microfone', 'Microfone', devs && devs.microfones)) +
       item('Testar o microfone', 'Fale alguma coisa: a barra mostra o que ele capta, por 10 segundos.', teste) +
       '<div id="teste-aviso"></div>' +
       item('Voz da ligação', 'Onde se ouve quem está do outro lado.', pick('altoFalante', 'Voz da ligação', devs && devs.altoFalantes)) +
-      item('Pausar música e vídeo', 'Ao atender, pausa o que estiver tocando; ao desligar, volta a tocar só o que foi pausado.', sw('pausarMusica', p.pausarMusica !== false, 'Pausar música e vídeo durante a ligação'))) +
+      item('Pausar música e vídeo', 'Ao atender, pausa o que estiver tocando; ao desligar, volta a tocar só o que foi pausado.', sw('pausarMusica', p.pausarMusica !== false, 'Pausar música e vídeo durante a ligação')))
+  if (state.erroPrefs) return inicio + '<div class="erro" role="alert">O arquivo de preferências tem um erro, e nada do que se muda aqui fica gravado até ele ser corrigido ou apagado:<pre class="mono">' + esc(state.erroPrefs) + '</pre></div>'
+  if (oculta()) return inicio + '<p class="muted nota-admin">As outras opções deste computador são definidas pelo administrador.</p>'
+  return inicio +
     grupo('Qualidade da voz',
       item('Cancelar o eco', 'Com caixa de som em vez de headset, o outro lado não ouve a própria voz de volta.', sw('cancelarEco', p.cancelarEco !== false, 'Cancelar o eco')) +
       item('Reduzir o ruído do microfone', 'Tira o ruído constante daqui (ventilador, ar-condicionado) do que vai para o outro lado.', sw('reduzirRuido', p.reduzirRuido !== false, 'Reduzir o ruído do microfone')) +
@@ -596,10 +612,12 @@ function fechaGravacao () {
 }
 function secToques () {
   const p = state.prefs, vol = p.volumeToque == null ? 50 : p.volumeToque
+  const toq = t => '<div class="toq" role="radio" tabindex="0" aria-checked="' + ((p.toque || 'colmeia') === t.id) + '" data-act="toque" data-v="' + esc(t.id) + '"><span class="ck">' + ic('check') + '</span><span class="nm">' + esc(t.nome) + '</span>' +
+    '<button type="button" class="iconbtn sm ghost" data-act="ouvir-toque" data-v="' + esc(t.id) + '" aria-label="Ouvir ' + esc(t.nome) + '" title="Ouvir">' + ic('play') + '</button></div>'
+  // Os fortes (27/11) ficam separados: para o callcenter, a sala com barulho.
+  const lista = (titulo, forte) => '<div class="grupo-titulo">' + titulo + '</div><div class="toques" role="radiogroup" aria-label="' + titulo + '">' + state.toques.filter(t => !!t.forte === forte).map(toq).join('') + '</div>'
   return cabeca('Toques e sons', 'O toque de quem liga e os sons da janela.') +
-    '<div class="grupo-titulo">Toque de quem liga</div><div class="toques" role="radiogroup" aria-label="Toque de quem liga">' +
-    state.toques.map(t => '<div class="toq" role="radio" tabindex="0" aria-checked="' + ((p.toque || 'colmeia') === t.id) + '" data-act="toque" data-v="' + esc(t.id) + '"><span class="ck">' + ic('check') + '</span><span class="nm">' + esc(t.nome) + '</span>' +
-      '<button type="button" class="iconbtn sm ghost" data-act="ouvir-toque" data-v="' + esc(t.id) + '" aria-label="Ouvir ' + esc(t.nome) + '" title="Ouvir">' + ic('play') + '</button></div>').join('') + '</div>' +
+    lista('Toques discretos', false) + lista('Toques fortes, para sala com barulho', true) +
     grupo('Como toca',
       item('Volume do toque', p.toqueNoMaximo ? 'Com o volume máximo ligado, o toque vai cheio.' : '', '<input id="vol-toque" type="range" min="0" max="100" step="5" value="' + vol + '" aria-label="Volume do toque"' + (p.toqueNoMaximo ? ' disabled' : '') + '><span class="tab muted" id="vol-toque-v">' + vol + '%</span>') +
       item('Tocar em todos os alto-falantes', 'Headset e caixas de som ao mesmo tempo, para ouvir de longe.', sw('toqueEmTodos', p.toqueEmTodos, 'Tocar em todos os alto-falantes')) +
@@ -739,7 +757,7 @@ const SONS = {
 
 // ---- Avisos do telefone ----
 function aplica (e) {
-  state.contas = e.contas; state.prefs = e.preferencias; state.temChaveiro = e.temChaveiro; state.pasta = e.pasta
+  state.contas = e.contas; state.prefs = e.preferencias; state.erroPrefs = e.erroPreferencias; state.temChaveiro = e.temChaveiro; state.pasta = e.pasta
   state.hist = e.historico; state.convs = e.conversas; state.toques = e.toques || []
   state.apelidos = e.apelidos || {}; state.presencas = e.presencas || {}
   if (e.chamada && !state.call) {
@@ -982,10 +1000,10 @@ document.addEventListener('click', async e => {
     case 'hold':
       if (c && c.kind === 'active' && await acao('espera', { id: c.id, sim: !c.held }, 'A espera não funcionou')) { c.held = !c.held; renderLeft(); renderStrip() }
       break
-    case 'nova-conta': novoForm(null); state.secao = 'contas'; if (state.view !== 'ajustes') go('ajustes'); else renderView(); { const i = document.querySelector('#fconta input'); if (i) i.focus() } break
-    case 'edita-conta': novoForm(state.contas.find(x => x.id === v)); renderView(); break
+    case 'nova-conta': if (oculta()) break; novoForm(null); state.secao = 'contas'; if (state.view !== 'ajustes') go('ajustes'); else renderView(); { const i = document.querySelector('#fconta input'); if (i) i.focus() } break
+    case 'edita-conta': if (oculta()) break; novoForm(state.contas.find(x => x.id === v)); renderView(); break
     case 'form-cancela': state.form = null; renderView(); break
-    case 'remove-conta': state.form = null; state.remover = v; renderView(); break
+    case 'remove-conta': if (oculta()) break; state.form = null; state.remover = v; renderView(); break
     case 'remove-cancela': state.remover = null; renderView(); break
     case 'tira-do-mudo':
       if (await acao('tira_do_mudo', {}, 'Não tirei do mudo')) { toast('Microfone fora do mudo. Fale alguma coisa.'); if (state.call) { state.call.micMudo = false; if (state.view === 'chamadas') renderLeft() } if (state.testeMic) { state.testeMic.mudo = false; mostraNivel(null) } }
@@ -1190,6 +1208,6 @@ async function abre () {
     state.versao = a.versao; state.atualizaSozinho = a.suportado
     if (a.pendente) recebeAtualizacao({ tipo: 'disponivel', release: a.pendente })
   } catch (e) { state.versao = '' }
-  if (!state.contas.length) { go('ajustes'); novoForm(null); renderView() } else go('chamadas')
+  if (!state.contas.length && !oculta()) { go('ajustes'); novoForm(null); renderView() } else go('chamadas')
 }
 abre()

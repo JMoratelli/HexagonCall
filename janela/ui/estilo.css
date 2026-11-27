@@ -422,6 +422,8 @@ body { border: 1px solid var(--border); }
 .cfgpane > * { flex-shrink: 0; }
 .cfghead h2 { margin: 0; font: 600 17px/1.25 var(--f-display); }
 .cfghead p { margin: 4px 0 0; max-width: 60ch; color: var(--muted-fg); font-size: 12.5px; }
+.nota-admin { margin: 0; padding: 0 2px; }
+.erro pre { margin: 6px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11.5px; }
 .grupo-titulo { margin: 4px 0 -6px; font-size: 11px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--muted-fg); }
 .grupo { border: 1px solid var(--border); border-radius: 14px; background: var(--card); overflow: hidden; }
 .grupo > .item { display: flex; align-items: center; gap: 14px; padding: 12px 14px; }

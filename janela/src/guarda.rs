@@ -119,6 +119,7 @@ pub struct Preferencias {
     pub alto_falante: Option<String>,
     /// Ligacao chegando traz a janela para a frente (a notificacao no canto
     /// aparece sempre; isto se desliga, pedido de 26/11).
+    #[serde(deserialize_with = "bool_ou_numero::sim_ou_nao")]
     pub trazer_para_frente: bool,
     pub sons: Sons,
     /// O toque de quem liga (id de `som::toque::toques`).
@@ -126,22 +127,127 @@ pub struct Preferencias {
     /// De 0 a 100.
     pub volume_toque: u8,
     /// Tocar em todos os alto-falantes (opcional, 26/11).
+    #[serde(deserialize_with = "bool_ou_numero::sim_ou_nao")]
     pub toque_em_todos: bool,
     /// Subir as saidas ao volume maximo enquanto toca (separado do "todos").
+    #[serde(deserialize_with = "bool_ou_numero::sim_ou_nao")]
     pub toque_no_maximo: bool,
     /// Pausar musica e video ao atender, e voltar ao desligar.
+    #[serde(deserialize_with = "bool_ou_numero::sim_ou_nao")]
     pub pausar_musica: bool,
     /// Gravar as ligacoes atendidas (gravacao.rs, pedido de 27/11).
+    #[serde(deserialize_with = "bool_ou_numero::sim_ou_nao")]
     pub gravar: bool,
     /// Por quantos dias uma gravacao fica; 0 guarda sempre.
     pub guardar_gravacoes: u32,
     /// Tirar o eco do alto-falante no microfone (som::eco; ligado de padrao).
+    #[serde(deserialize_with = "bool_ou_numero::sim_ou_nao")]
     pub cancelar_eco: bool,
     /// Tirar o ruido constante do microfone (ligado de padrao).
+    #[serde(deserialize_with = "bool_ou_numero::sim_ou_nao")]
     pub reduzir_ruido: bool,
     /// Limpar o que chega do outro lado (RNNoise; ligado de padrao, como os
     /// outros dois: pedido de 27/11).
+    #[serde(deserialize_with = "bool_ou_numero::sim_ou_nao")]
     pub voz_nitida: bool,
+    /// So pelo arquivo (pedido de 27/11, para instalar em massa):
+    /// `ocultaConfig = 1` tira da tela Contas, Toques e sons, Janela e, em
+    /// Audio, tudo menos o primeiro bloco. O resto, quem administra muda aqui.
+    #[serde(with = "trava")]
+    pub oculta_config: bool,
+    /// So pelo arquivo e so com `ocultaConfig`: `true` liga e `false` desliga
+    /// o abrir com o sistema cada vez que o app abre. Sem a chave, fica como
+    /// estiver; sem `ocultaConfig`, quem decide e a tela.
+    #[serde(deserialize_with = "bool_ou_numero::talvez")]
+    pub abrir_com_o_sistema: Option<bool>,
+}
+
+/// As opcoes de ligar e desligar aceitam `0` e `1` tambem: quem administra
+/// escreve `gravar = 1` como escreve o `ocultaConfig = 1`.
+mod bool_ou_numero {
+    use serde::de::Error;
+    use serde::{Deserialize, Deserializer};
+
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Valor {
+        Sim(bool),
+        Numero(i64),
+    }
+
+    fn de<E: Error>(v: Valor) -> Result<bool, E> {
+        match v {
+            Valor::Sim(b) => Ok(b),
+            Valor::Numero(0) => Ok(false),
+            Valor::Numero(1) => Ok(true),
+            Valor::Numero(n) => Err(E::custom(format!("vale 0 ou 1, nao {n}"))),
+        }
+    }
+
+    pub fn sim_ou_nao<'de, D: Deserializer<'de>>(d: D) -> Result<bool, D::Error> {
+        de(Valor::deserialize(d)?)
+    }
+
+    /// O `null` que a tela manda e "sem a chave".
+    pub fn talvez<'de, D: Deserializer<'de>>(d: D) -> Result<Option<bool>, D::Error> {
+        Option::<Valor>::deserialize(d)?.map(de).transpose()
+    }
+}
+
+/// O `ocultaConfig` vai para o arquivo como `0` ou `1`. Na leitura, so `0` e
+/// `false` destravam: qualquer outro valor trava, mesmo o que nao vale (`2`,
+/// `"1"`), porque quem escreveu a chave queria travar.
+mod trava {
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    #[allow(clippy::trivially_copy_pass_by_ref)]
+    pub fn serialize<S: Serializer>(sim: &bool, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_u8(u8::from(*sim))
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<bool, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Valor {
+            Sim(bool),
+            Numero(i64),
+            Real(f64),
+            Texto(String),
+            Outro(serde::de::IgnoredAny),
+        }
+        Ok(match Valor::deserialize(d)? {
+            Valor::Sim(b) => b,
+            Valor::Numero(n) => n != 0,
+            Valor::Real(r) => r != 0.0,
+            Valor::Texto(s) => !matches!(s.trim(), "0" | "false"),
+            Valor::Outro(_) => true,
+        })
+    }
+}
+
+impl Preferencias {
+    /// As preferencias que a tela mandou, depois de tirar o que ela nao muda:
+    /// o flavor, o `ocultaConfig` e o abrir com o sistema ficam como estao no
+    /// arquivo; com `ocultaConfig`, so vale o que a tela mostra (o tema e o
+    /// primeiro bloco de Audio).
+    pub fn com_o_que_a_tela_muda(&self, tela: Self) -> Self {
+        if self.oculta_config {
+            Self {
+                tema: tela.tema,
+                microfone: tela.microfone,
+                alto_falante: tela.alto_falante,
+                pausar_musica: tela.pausar_musica,
+                ..self.clone()
+            }
+        } else {
+            Self {
+                flavor: self.flavor,
+                oculta_config: false,
+                abrir_com_o_sistema: self.abrir_com_o_sistema,
+                ..tela
+            }
+        }
+    }
 }
 
 impl Default for Preferencias {
@@ -163,6 +269,8 @@ impl Default for Preferencias {
             cancelar_eco: true,
             reduzir_ruido: true,
             voz_nitida: true,
+            oculta_config: false,
+            abrir_com_o_sistema: None,
         }
     }
 }
@@ -239,7 +347,7 @@ impl Guarda {
     /// Sem arquivo (primeira vez) ou sem conta nenhuma: lista vazia.
     pub fn contas(&self) -> Result<Vec<Conta>, String> {
         let caminho = self.arquivo("contas.toml");
-        let texto = match fs::read_to_string(&caminho) {
+        let texto = match le_texto(&caminho) {
             Ok(t) => t,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
             Err(e) => return Err(format!("{}: {e}", caminho.display())),
@@ -259,9 +367,40 @@ impl Guarda {
     // ---- Preferencias ----
 
     pub fn preferencias(&self) -> Preferencias {
-        fs::read_to_string(self.arquivo("preferencias.toml"))
-            .map(|t| preferencias_de(&t))
-            .unwrap_or_default()
+        self.preferencias_e_erro().0
+    }
+
+    /// As preferencias e, quando o arquivo existe e nao abre (nao le, nao e
+    /// TOML), o motivo. Ai vale o padrao com a trava ligada: o arquivo pode ser
+    /// de quem administra, com um erro de digitacao, e nao se destrava a tela
+    /// nem se grava por cima dele (ver `preferencias_lidas`).
+    pub fn preferencias_e_erro(&self) -> (Preferencias, Option<String>) {
+        match self.preferencias_lidas() {
+            Ok(p) => (p, None),
+            Err(e) => {
+                debug!("preferencias: {e}");
+                let p = Preferencias {
+                    oculta_config: true,
+                    ..Preferencias::default()
+                };
+                (p, Some(e))
+            }
+        }
+    }
+
+    /// As preferencias para mudar e gravar: erro quando o arquivo existe e nao
+    /// abre, para nao gravar o padrao por cima do que esta la.
+    pub fn preferencias_lidas(&self) -> Result<Preferencias, String> {
+        let caminho = self.arquivo("preferencias.toml");
+        let texto = match le_texto(&caminho) {
+            Ok(t) => t,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(Preferencias::default());
+            }
+            Err(e) => return Err(format!("{}: {e}", caminho.display())),
+        };
+        toml::from_str::<toml::Table>(&texto).map_err(|e| format!("{}: {e}", caminho.display()))?;
+        Ok(preferencias_de(&texto))
     }
 
     /// Os dias de retencao das gravacoes como estao salvos, para a retencao
@@ -270,7 +409,7 @@ impl Guarda {
     /// que o usuario mandou guardar para sempre.
     pub fn retencao_salva(&self) -> Option<u32> {
         let padrao = Preferencias::default().guardar_gravacoes;
-        let texto = match fs::read_to_string(self.arquivo("preferencias.toml")) {
+        let texto = match le_texto(&self.arquivo("preferencias.toml")) {
             Ok(t) => t,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Some(padrao),
             Err(_) => return None,
@@ -284,11 +423,71 @@ impl Guarda {
         }
     }
 
+    /// Ao abrir: as chaves que faltam no arquivo de preferencias, cada uma no
+    /// valor que vale (o padrao), para quem administra ver o que existe; o
+    /// `ocultaConfig = 0`, por exemplo. Sem arquivo, grava todas. O que ja esta
+    /// escrito fica como esta, comentarios inclusive: as que faltam entram no
+    /// fim. Um arquivo que nao se le, nao e TOML ou tem secao (`[...]` ou
+    /// `[[...]]`, onde as do fim cairiam) nao se toca; e so se grava depois de
+    /// conferir que o texto novo vale o mesmo que o velho (o `marca` de antes,
+    /// por exemplo, com o `flavor` acrescentado, viraria chave repetida).
+    /// Devolve se gravou.
+    pub fn completa_preferencias(&self) -> Result<bool, String> {
+        let caminho = self.arquivo("preferencias.toml");
+        let texto = match le_texto(&caminho) {
+            Ok(t) => t,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                self.grava_preferencias(&Preferencias::default())?;
+                return Ok(true);
+            }
+            Err(_) => return Ok(false),
+        };
+        let Ok(tabela) = toml::from_str::<toml::Table>(&texto) else {
+            return Ok(false);
+        };
+        let secao = |v: &toml::Value| {
+            v.is_table()
+                || v.as_array()
+                    .is_some_and(|a| a.iter().any(toml::Value::is_table))
+        };
+        if tabela.values().any(secao) {
+            return Ok(false);
+        }
+        let valem = preferencias_de(&texto);
+        let Ok(toml::Value::Table(todas)) = toml::Value::try_from(&valem) else {
+            return Ok(false);
+        };
+        let faltam: toml::Table = todas
+            .into_iter()
+            .filter(|(chave, _)| {
+                !tabela.contains_key(chave) && !(chave == "flavor" && tabela.contains_key("marca"))
+            })
+            .collect();
+        if faltam.is_empty() {
+            return Ok(false);
+        }
+        let mais = toml::to_string(&faltam).map_err(|e| e.to_string())?;
+        let quebra = if texto.is_empty() || texto.ends_with('\n') {
+            ""
+        } else {
+            "\n"
+        };
+        let novo = format!("{texto}{quebra}{mais}");
+        if toml::from_str::<toml::Table>(&novo).is_err() || preferencias_de(&novo) != valem {
+            debug!("completar as preferencias mudaria o que vale: fica como esta");
+            return Ok(false);
+        }
+        grava_inteiro(&caminho, &novo, false)?;
+        Ok(true)
+    }
+
     pub fn grava_preferencias(&self, p: &Preferencias) -> Result<(), String> {
         let corpo = toml::to_string(p).map_err(|e| e.to_string())?;
         let texto = format!(
             "# Preferencias do Hexagon Call (gravadas pelo app).\n\
-             # flavor = \"mcalls\" liga o M Calls (vermelho); \"hexagon\" e o padrao.\n\n{corpo}"
+             # flavor = \"mcalls\" liga o M Calls (vermelho); \"hexagon\" e o padrao.\n\
+             # ocultaConfig = 1 esconde da tela as contas e quase todas as opcoes: muda-se aqui.\n\
+             # Com ele, abrirComOSistema = true liga o abrir com o sistema (false desliga).\n\n{corpo}"
         );
         grava_inteiro(&self.arquivo("preferencias.toml"), &texto, false)
     }
@@ -358,7 +557,7 @@ impl Guarda {
             #[serde(default)]
             senhas: BTreeMap<String, String>,
         }
-        fs::read_to_string(self.arquivo("senhas.toml"))
+        le_texto(&self.arquivo("senhas.toml"))
             .ok()
             .and_then(|t| toml::from_str::<Arquivo>(&t).ok())
             .unwrap_or_default()
@@ -462,7 +661,7 @@ impl Guarda {
     /// texto, sem levar os outros.
     fn nomes_lidos(&self) -> Result<BTreeMap<String, String>, String> {
         let caminho = self.arquivo("nomes.toml");
-        let texto = match fs::read_to_string(&caminho) {
+        let texto = match le_texto(&caminho) {
             Ok(t) => t,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(BTreeMap::new()),
             Err(e) => return Err(format!("{}: {e}", caminho.display())),
@@ -624,6 +823,30 @@ fn item_historico(mut c: Vec<String>) -> Option<ItemHistorico> {
 }
 
 /// Grava num temporario e troca: o arquivo nunca fica pela metade.
+/// Um arquivo de configuracao em texto: UTF-8, com ou sem BOM, ou UTF-16 com
+/// BOM, que e o que o `Out-File` e o `>` do PowerShell 5.1 gravam (quem
+/// instala em massa no Windows). O app sempre grava em UTF-8.
+fn le_texto(caminho: &Path) -> std::io::Result<String> {
+    let invalido = |e: String| std::io::Error::new(std::io::ErrorKind::InvalidData, e);
+    let utf16 = |resto: &[u8], de: fn([u8; 2]) -> u16| {
+        let (pares, sobra) = resto.as_chunks::<2>();
+        if !sobra.is_empty() {
+            return Err(invalido("UTF-16 com um byte sobrando".into()));
+        }
+        let unidades: Vec<u16> = pares.iter().copied().map(de).collect();
+        String::from_utf16(&unidades).map_err(|e| invalido(e.to_string()))
+    };
+    let bytes = fs::read(caminho)?;
+    match bytes.as_slice() {
+        [0xFF, 0xFE, resto @ ..] => utf16(resto, u16::from_le_bytes),
+        [0xFE, 0xFF, resto @ ..] => utf16(resto, u16::from_be_bytes),
+        [0xEF, 0xBB, 0xBF, resto @ ..] => {
+            String::from_utf8(resto.to_vec()).map_err(|e| invalido(e.to_string()))
+        }
+        _ => String::from_utf8(bytes).map_err(|e| invalido(e.to_string())),
+    }
+}
+
 fn grava_inteiro(caminho: &Path, texto: &str, so_do_usuario: bool) -> Result<(), String> {
     // Um atalho (para uma pasta sincronizada, por exemplo) continua atalho:
     // grava no arquivo de verdade. E a permissao de quem ja estava fica.
@@ -809,9 +1032,196 @@ mod testes {
             cancelar_eco: false,
             reduzir_ruido: true,
             voz_nitida: true,
+            oculta_config: true,
+            abrir_com_o_sistema: Some(true),
         };
         g.grava_preferencias(&p).unwrap();
         assert_eq!(g.preferencias(), p);
+        let texto = fs::read_to_string(g.pasta().join("preferencias.toml")).unwrap();
+        assert!(texto.contains("\nocultaConfig = 1\n"), "{texto}");
+    }
+
+    #[test]
+    fn oculta_config_e_zero_ou_um_e_o_que_nao_vale_nao_leva_os_outros() {
+        // So 0 e false destravam: o que nao vale trava (quem escreveu queria travar).
+        for (texto, sim) in [
+            ("ocultaConfig = 1", true),
+            ("ocultaConfig = 0", false),
+            ("ocultaConfig = true", true),
+            ("ocultaConfig = false", false),
+            ("ocultaConfig = 2", true),
+            ("ocultaConfig = \"1\"", true),
+            ("ocultaConfig = \"0\"", false),
+            ("ocultaConfig = [1]", true),
+        ] {
+            let p = preferencias_de(&format!("{texto}\ntema = \"escuro\"\n"));
+            assert_eq!(p.oculta_config, sim, "{texto}");
+            assert_eq!(p.tema, Tema::Escuro, "{texto}");
+        }
+        assert_eq!(preferencias_de("").abrir_com_o_sistema, None);
+        assert_eq!(
+            preferencias_de("abrirComOSistema = false").abrir_com_o_sistema,
+            Some(false)
+        );
+        // Os outros de ligar e desligar tambem aceitam 0 e 1.
+        let p = preferencias_de(
+            "gravar = 1\nabrirComOSistema = 1\ncancelarEco = 0\ntoqueNoMaximo = 7\n",
+        );
+        assert!(p.gravar);
+        assert_eq!(p.abrir_com_o_sistema, Some(true));
+        assert!(!p.cancelar_eco);
+        assert!(!p.toque_no_maximo);
+        // O que a tela manda, em JSON: o null do abrirComOSistema e "sem a chave".
+        let tela: Preferencias = serde_json::from_str(
+            r#"{"abrirComOSistema": null, "ocultaConfig": 1, "gravar": true}"#,
+        )
+        .unwrap();
+        assert_eq!(tela.abrir_com_o_sistema, None);
+        assert!(tela.oculta_config && tela.gravar);
+    }
+
+    #[test]
+    fn arquivo_que_nao_abre_trava_e_nao_se_grava_por_cima() {
+        let g = Guarda::em(&pasta_de_teste("quebrado"));
+        let arquivo = g.pasta().join("preferencias.toml");
+        let quebrado = "ocultaConfig = 1\ntoque = alerta\n";
+        fs::write(&arquivo, quebrado).unwrap();
+        let (p, erro) = g.preferencias_e_erro();
+        assert!(p.oculta_config);
+        assert!(erro.is_some());
+        assert!(g.preferencias_lidas().is_err());
+        assert!(!g.completa_preferencias().unwrap());
+        assert_eq!(fs::read_to_string(&arquivo).unwrap(), quebrado);
+        // Sem arquivo nao e erro: o padrao, destravado.
+        fs::remove_file(&arquivo).unwrap();
+        assert_eq!(g.preferencias_e_erro(), (Preferencias::default(), None));
+    }
+
+    #[test]
+    fn le_o_utf16_do_powershell() {
+        let g = Guarda::em(&pasta_de_teste("utf16"));
+        let arquivo = g.pasta().join("preferencias.toml");
+        let texto = "ocultaConfig = 1\r\ntoque = \"recepção\"\r\n";
+        let mut le = vec![0xFF, 0xFE];
+        le.extend(texto.encode_utf16().flat_map(u16::to_le_bytes));
+        fs::write(&arquivo, &le).unwrap();
+        let p = g.preferencias_lidas().unwrap();
+        assert!(p.oculta_config);
+        assert_eq!(p.toque, "recepção");
+        let mut be = vec![0xFE, 0xFF];
+        be.extend(texto.encode_utf16().flat_map(u16::to_be_bytes));
+        fs::write(&arquivo, &be).unwrap();
+        assert!(g.preferencias_lidas().unwrap().oculta_config);
+        let mut bom = vec![0xEF, 0xBB, 0xBF];
+        bom.extend(texto.as_bytes());
+        fs::write(&arquivo, &bom).unwrap();
+        assert!(g.preferencias_lidas().unwrap().oculta_config);
+        // Completar grava em UTF-8, com o que ja valia.
+        fs::write(&arquivo, &le).unwrap();
+        assert!(g.completa_preferencias().unwrap());
+        let depois = fs::read_to_string(&arquivo).unwrap();
+        assert!(depois.starts_with("ocultaConfig = 1\r\n"), "{depois}");
+        assert_eq!(g.preferencias_lidas().unwrap().toque, "recepção");
+        // UTF-16 cortado no meio: erro, nao lixo.
+        fs::write(&arquivo, [0xFF, 0xFE, 0x41]).unwrap();
+        assert!(g.preferencias_lidas().is_err());
+    }
+
+    #[test]
+    fn com_oculta_config_a_tela_so_muda_o_que_mostra() {
+        let arquivo = Preferencias {
+            oculta_config: true,
+            abrir_com_o_sistema: Some(true),
+            toque: "alerta".into(),
+            gravar: true,
+            ..Preferencias::default()
+        };
+        let tela = Preferencias {
+            flavor: Flavor::Mcalls,
+            tema: Tema::Escuro,
+            microfone: Some("alsa:default".into()),
+            alto_falante: Some("alsa:fone".into()),
+            pausar_musica: false,
+            toque: "suave".into(),
+            gravar: false,
+            voz_nitida: false,
+            trazer_para_frente: false,
+            oculta_config: false,
+            abrir_com_o_sistema: Some(false),
+            ..Preferencias::default()
+        };
+        let p = arquivo.com_o_que_a_tela_muda(tela.clone());
+        assert_eq!(
+            p,
+            Preferencias {
+                tema: Tema::Escuro,
+                microfone: Some("alsa:default".into()),
+                alto_falante: Some("alsa:fone".into()),
+                pausar_musica: false,
+                ..arquivo.clone()
+            }
+        );
+        // Sem ocultaConfig, a tela muda tudo menos o que e so do arquivo.
+        let livre = Preferencias {
+            oculta_config: false,
+            ..arquivo
+        };
+        let p = livre.com_o_que_a_tela_muda(tela.clone());
+        assert_eq!(
+            p,
+            Preferencias {
+                flavor: Flavor::Hexagon,
+                abrir_com_o_sistema: Some(true),
+                ..tela
+            }
+        );
+    }
+
+    #[test]
+    fn completar_as_preferencias_poe_so_o_que_falta_no_fim() {
+        let g = Guarda::em(&pasta_de_teste("completa"));
+        let arquivo = g.pasta().join("preferencias.toml");
+        // Sem arquivo: todas, com o ocultaConfig = 0.
+        assert!(g.completa_preferencias().unwrap());
+        let texto = fs::read_to_string(&arquivo).unwrap();
+        assert!(texto.contains("\nocultaConfig = 0\n"), "{texto}");
+        assert_eq!(g.preferencias(), Preferencias::default());
+        assert!(!g.completa_preferencias().unwrap());
+        // O que quem administra escreveu fica, comentario inclusive; o que
+        // falta entra no fim, no padrao.
+        let escrito = "# do administrador\nocultaConfig = 1\ntoque = \"alerta\"";
+        fs::write(&arquivo, escrito).unwrap();
+        assert!(g.completa_preferencias().unwrap());
+        let texto = fs::read_to_string(&arquivo).unwrap();
+        assert!(texto.starts_with(&format!("{escrito}\n")), "{texto}");
+        assert_eq!(texto.matches("ocultaConfig").count(), 1);
+        assert_eq!(
+            g.preferencias(),
+            Preferencias {
+                oculta_config: true,
+                toque: "alerta".into(),
+                ..Preferencias::default()
+            }
+        );
+        assert!(!g.completa_preferencias().unwrap());
+        // O marca de antes (nome velho do flavor): o flavor nao entra junto.
+        let marca = "marca = \"mcalls\"\nocultaConfig = 1\n";
+        fs::write(&arquivo, marca).unwrap();
+        assert!(g.completa_preferencias().unwrap());
+        let texto = fs::read_to_string(&arquivo).unwrap();
+        assert!(!texto.contains("flavor"), "{texto}");
+        let p = g.preferencias_lidas().unwrap();
+        assert!(p.oculta_config && p.flavor == Flavor::Mcalls);
+        // Quebrado ou com secao: nao se toca.
+        for estranho in [
+            "ocultaConfig = 1\n[[extra]]\nx = 1\n",
+            "ocultaConfig = = 1\n",
+            "tema = \"escuro\"\n[outra]\nx = 1\n",
+        ] {
+            fs::write(&arquivo, estranho).unwrap();
+            assert!(!g.completa_preferencias().unwrap());
+            assert_eq!(fs::read_to_string(&arquivo).unwrap(), estranho);
+        }
     }
 
     #[test]

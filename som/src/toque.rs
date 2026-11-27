@@ -1,7 +1,9 @@
 //! O toque de quem liga, tocado pelo app (e nao pela tela): assim ele sai no
 //! alto-falante escolhido ou em todos ao mesmo tempo, e no volume que se quer.
-//! Os toques sao sintetizados aqui, sem arquivo de som: notas com subida curta
-//! e queda suave, repetidas a cada `periodo`.
+//! Os toques sao sintetizados aqui, sem arquivo de som: notas repetidas a cada
+//! `periodo`. Os discretos sao notas que sobem curto e caem suave; os fortes
+//! (pedido de 27/11, para o callcenter) ficam cheios a nota inteira, com o
+//! timbre aspero de uma onda quadrada, que se ouve numa sala com barulho.
 //!
 //! Duas opcoes separadas (pedido de 26/11): "tocar em todos os
 //! alto-falantes" e "volume maximo". O maximo, no Linux, sobe a 100% e tira o
@@ -16,18 +18,30 @@ use std::f32::consts::TAU;
 use std::sync::Arc;
 use tracing::{debug, info, warn};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Forma {
+    /// Sobe em 15 ms e cai em curva ate zero no fim: os toques discretos.
+    Sino,
+    /// Cheia do comeco ao fim (sobe em 5 ms, sai nos ultimos 10 ms), com os
+    /// harmonicos impares de uma onda quadrada: os toques fortes.
+    Firme,
+}
+
 #[derive(Debug, Clone)]
 pub struct Nota {
     pub freqs: Vec<f32>,
     pub inicio: f32,
     pub dur: f32,
     pub vol: f32,
+    pub forma: Forma,
 }
 
 #[derive(Debug, Clone)]
 pub struct Toque {
     pub id: &'static str,
     pub nome: &'static str,
+    /// Dos fortes, para ambiente com barulho (a tela mostra separado).
+    pub forte: bool,
     pub periodo: f32,
     pub notas: Vec<Nota>,
 }
@@ -38,10 +52,22 @@ fn nota(freqs: &[f32], inicio: f32, dur: f32, vol: f32) -> Nota {
         inicio,
         dur,
         vol,
+        forma: Forma::Sino,
     }
 }
 
-/// Os toques de quem liga. O primeiro e o padrao: o aprovado em 26/11.
+fn firme(f: f32, inicio: f32, dur: f32) -> Nota {
+    Nota {
+        freqs: vec![f],
+        inicio,
+        dur,
+        vol: 1.0,
+        forma: Forma::Firme,
+    }
+}
+
+/// Os toques de quem liga, os discretos antes dos fortes. O primeiro e o
+/// padrao: o aprovado em 26/11.
 pub fn toques() -> Vec<Toque> {
     // O "telefone antigo": a campainha batendo entre duas notas, 1 s sim, 1 s nao, duas vezes.
     let mut campainha = Vec::new();
@@ -56,9 +82,18 @@ pub fn toques() -> Vec<Toque> {
             ));
         }
     }
+    // O telefone de mesa de escritorio: duas rajadas de 0,4 s trinando entre duas notas.
+    let mut recepcao = Vec::new();
+    for rajada in [0.0f32, 0.6] {
+        for i in 0..10u8 {
+            let f = if i % 2 == 0 { 1300.0 } else { 1600.0 };
+            recepcao.push(firme(f, rajada + f32::from(i) * 0.04, 0.04));
+        }
+    }
     vec![
         Toque {
             id: "colmeia",
+            forte: false,
             nome: "Colmeia",
             periodo: 3.0,
             notas: vec![
@@ -68,6 +103,7 @@ pub fn toques() -> Vec<Toque> {
         },
         Toque {
             id: "marimba",
+            forte: false,
             nome: "Marimba",
             periodo: 2.6,
             notas: vec![
@@ -79,6 +115,7 @@ pub fn toques() -> Vec<Toque> {
         },
         Toque {
             id: "suave",
+            forte: false,
             nome: "Suave",
             periodo: 4.0,
             notas: vec![
@@ -88,6 +125,7 @@ pub fn toques() -> Vec<Toque> {
         },
         Toque {
             id: "digital",
+            forte: false,
             nome: "Digital",
             periodo: 2.0,
             notas: vec![
@@ -99,9 +137,38 @@ pub fn toques() -> Vec<Toque> {
         },
         Toque {
             id: "antigo",
+            forte: false,
             nome: "Campainha",
             periodo: 6.0,
             notas: campainha,
+        },
+        Toque {
+            id: "recepcao",
+            forte: true,
+            nome: "Recepção",
+            periodo: 2.6,
+            notas: recepcao,
+        },
+        Toque {
+            id: "alerta",
+            forte: true,
+            nome: "Alerta",
+            periodo: 1.2,
+            notas: (0..3u8)
+                .map(|i| firme(1000.0, f32::from(i) * 0.2, 0.12))
+                .collect(),
+        },
+        Toque {
+            id: "insistente",
+            forte: true,
+            nome: "Insistente",
+            periodo: 2.2,
+            notas: (0..8u8)
+                .map(|i| {
+                    let f = if i % 2 == 0 { 880.0 } else { 1175.0 };
+                    firme(f, f32::from(i) * 0.2, 0.2)
+                })
+                .collect(),
         },
     ]
 }
@@ -115,6 +182,7 @@ pub fn toque(id: &str) -> Toque {
         .or(padrao)
         .unwrap_or(Toque {
             id: "silencio",
+            forte: false,
             nome: "Silencio",
             periodo: 1.0,
             notas: Vec::new(),
@@ -130,13 +198,24 @@ pub fn amostra(toque: &Toque, t: f32) -> f32 {
         if dt < 0.0 || dt > n.dur {
             continue;
         }
-        // Sobe em 15 ms e cai em curva ate zero no fim da nota: sem estalo no
-        // corte, e bipe curto continua audivel.
-        let queda = 1.0 - dt / n.dur;
-        let envelope = (dt / 0.015).min(1.0) * queda * queda;
+        // Sem estalo no comeco nem no corte; o sino cai em curva, e bipe curto
+        // continua audivel.
+        let envelope = match n.forma {
+            Forma::Sino => {
+                let queda = 1.0 - dt / n.dur;
+                (dt / 0.015).min(1.0) * queda * queda
+            }
+            Forma::Firme => (dt / 0.005).min(1.0).min((n.dur - dt) / 0.01),
+        };
         let peso = n.vol / n.freqs.len().max(1) as f32;
         for f in &n.freqs {
-            soma += peso * envelope * (TAU * f * dt).sin();
+            let x = TAU * f * dt;
+            let onda = match n.forma {
+                Forma::Sino => x.sin(),
+                // A quadrada ate o 5o harmonico chega a 0,93: o 1,05 a leva a 0,98, sem cortar.
+                Forma::Firme => 1.05 * (x.sin() + (3.0 * x).sin() / 3.0 + (5.0 * x).sin() / 5.0),
+            };
+            soma += peso * envelope * onda;
         }
     }
     soma.clamp(-1.0, 1.0)
@@ -315,6 +394,33 @@ mod testes {
                 assert!((v - depois).abs() < 0.05, "{}: nao se repete em {s}", t.id);
             }
             assert!(maior > 0.2, "{}: quase mudo ({maior})", t.id);
+        }
+    }
+
+    /// A forca de um periodo inteiro (raiz da media dos quadrados).
+    fn forca(t: &Toque) -> f32 {
+        let n = 48_000u16;
+        let mut soma = 0.0;
+        for i in 0..n {
+            let v = amostra(t, t.periodo * f32::from(i) / f32::from(n));
+            soma += v * v;
+        }
+        (soma / f32::from(n)).sqrt()
+    }
+
+    #[test]
+    fn os_fortes_vem_depois_e_soam_bem_mais_que_os_discretos() {
+        let todos = toques();
+        let primeiro_forte = todos.iter().position(|t| t.forte).unwrap();
+        assert!(todos[primeiro_forte..].iter().all(|t| t.forte));
+        assert_eq!(todos.len() - primeiro_forte, 3);
+        let discretos = todos[..primeiro_forte]
+            .iter()
+            .map(forca)
+            .fold(0.0, f32::max);
+        for t in &todos[primeiro_forte..] {
+            let f = forca(t);
+            assert!(f > 2.0 * discretos, "{}: {f} contra {discretos}", t.id);
         }
     }
 

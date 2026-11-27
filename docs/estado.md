@@ -59,6 +59,28 @@ O que está validado, o que falta e as decisões tomadas. Atualizar ao fim de ca
 
 ### Mais decisões de 27/11
 
+- **Toques fortes** (pedido dele em 27/11, para o callcenter): Recepção (o trinado do telefone de mesa, em duas
+  rajadas), Alerta (três bipes por segundo) e Insistente (duas notas alternando, quase sem pausa). Cheios a nota
+  inteira e com o timbre áspero de uma onda quadrada (até o 5º harmônico), em vez de subir e sumir como os discretos:
+  cada um tem mais que o dobro da força do mais forte dos discretos (`som/src/toque.rs`, teste). Na tela, num grupo à
+  parte, "Toques fortes, para sala com barulho".
+- **`ocultaConfig`** (pedido dele em 27/11, para instalar em massa): só pelo `preferencias.toml`, `0` de padrão (vale
+  também `true`/`false`). Com `1`, somem Contas, Toques e sons e Janela, e Áudio fica só com o primeiro bloco
+  (microfone, testar, alto-falante, pausar música). Sem conta, a tela inicial diz "Nenhum ramal neste computador" em
+  vez do cadastro. O Rust também recusa pela tela: `salva_conta`, `remove_conta` e ligar ou desligar o abrir com o
+  sistema dão erro, e `salva_preferencias` só aceita o que a tela mostra. A senha vem do `senhas.toml`, que o app já
+  lia quando o chaveiro não tem a senha. Com `ocultaConfig`, `abrirComOSistema = true/false` no arquivo manda no abrir
+  com o sistema a cada abertura. Ao abrir, o app acrescenta no fim do arquivo as chaves que faltam, no padrão, para
+  quem administra ver o que existe; um arquivo que não é TOML ou tem seção não se toca.
+  Da revisão adversarial (27/11), corrigido antes do commit: completar o arquivo com o `marca` de antes acrescentava o
+  `flavor` (chave repetida: tudo voltava ao padrão, destravado) e um `[[seção]]` passava pela guarda; agora o texto
+  novo só se grava se valer o mesmo que o velho. Um arquivo que existe e não abre (erro de digitação, UTF-16 do
+  `Out-File`) destravava a tela e era regravado com o padrão no primeiro clique: agora o UTF-16 se lê, e o que não
+  abre deixa a tela travada, mostra o erro em Áudio e não se grava por cima. Só `0`/`false` destravam (um valor que
+  não vale trava). As outras opções de ligar e desligar aceitam `0`/`1` (o `gravar = 1` caía no padrão calado). Com a
+  trava, a conta parada se reconecta pelo próprio indicador (a tela Contas some). O completar roda depois da trava de
+  instância única. Fica como está: mudar uma opção pela tela regrava o arquivo sem os comentários; com a trava, apagar
+  gravações pelo histórico continua liberado (não foi pedido travar).
 - **Release 1.0.0** (pedido dele em 27/11): sai com o que está pronto e validado no Linux e no Windows, antes da
   transferência com consulta, da outra ligação no meio de uma e do inglês, que entram nas próximas versões. O
   AppImageHub continua esperando o inglês.
@@ -256,6 +278,14 @@ aberto:
   a informação de atualização do GitHub.
 
 ## Validado em 27/11/2026 (testes locais e a janela num KWin virtual)
+
+- [x] Toques fortes no grupo à parte; `ocultaConfig = 1` com conta (só Áudio, Aparência e Sobre; o "!" do Ajustes
+  some, pois quem usa não tem o que fazer) e sem conta ("Nenhum ramal neste computador"); mudar o "Pausar música"
+  regrava o arquivo com o `ocultaConfig = 1` e o `abrirComOSistema` de antes; `abrirComOSistema = true` cria a
+  entrada do abrir com o sistema e `false` tira. Primeira abertura sem arquivo: o `preferencias.toml` nasce com todas
+  as chaves, `ocultaConfig = 0` no fim. Cuidado no teste: o plugin do abrir com o sistema grava em
+  `$HOME/.config/autostart`, sem olhar o `XDG_CONFIG_HOME`; a janela de teste precisa de um `HOME` próprio, ou troca a
+  entrada de quem usa o computador.
 
 - [x] Atendida em outro ramal: no motor, um PBX falso por UDP cru manda o INVITE e o CANCEL com o `Reason` do chan_sip
   (`atendida_em_outro_ramal_nao_e_perdida`); sem o `Reason` continua perdida. Na janela, o mesmo PBX falso: aviso

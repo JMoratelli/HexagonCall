@@ -85,6 +85,9 @@ pub enum Evento {
     /// A ligacao que fizemos esta tocando do outro lado (180/183).
     Tocando {
         id: String,
+        /// A resposta que disse que tocava: 180 (toca de verdade) ou 183 (o
+        /// PBX ja manda audio, que pode ser so um recado).
+        codigo: u16,
     },
     Atendida {
         id: String,
@@ -1079,6 +1082,19 @@ impl Ua {
         Ok(())
     }
 
+    /// O pico da voz de cada lado desde a ultima leitura (nosso, deles), de 0
+    /// a 32767: a tela mostra quem esta falando.
+    pub fn niveis(&self, id: &str) -> Result<(u16, u16), Erro> {
+        let ligacoes = trava(&self.ligacoes);
+        let sessao = ligacoes
+            .get(id)
+            .ok_or_else(|| Erro::SemLigacao(id.to_string()))?
+            .sessao
+            .as_ref()
+            .ok_or_else(|| Erro::EstadoErrado(id.to_string()))?;
+        Ok(sessao.niveis())
+    }
+
     /// Grava a ligacao atendida (`Some`) ou para de gravar (`None`).
     pub fn grava(&self, id: &str, gravador: Option<Box<dyn Gravador>>) -> Result<(), Erro> {
         let ligacoes = trava(&self.ligacoes);
@@ -1411,7 +1427,7 @@ impl Ua {
                     }
                 }
             }
-            DialogState::Early(id, _) => {
+            DialogState::Early(id, resposta) => {
                 let avisar = trava(&self.ligacoes)
                     .get_mut(&id.call_id)
                     .filter(|l| l.sentido == Sentido::Saida && !l.tocando)
@@ -1420,7 +1436,10 @@ impl Ua {
                     })
                     .is_some();
                 if avisar {
-                    self.avisa(Evento::Tocando { id: id.call_id });
+                    self.avisa(Evento::Tocando {
+                        id: id.call_id,
+                        codigo: resposta.status_code.code(),
+                    });
                 }
             }
             DialogState::Terminated(id, motivo) => {

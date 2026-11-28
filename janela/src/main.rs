@@ -20,6 +20,7 @@ mod gravacao;
 mod guarda;
 mod musica;
 mod notificacao;
+mod perdidas;
 mod telefone;
 
 use guarda::{Flavor, Guarda, Preferencias};
@@ -42,6 +43,11 @@ pub fn mostra(app: &AppHandle) {
         let _ = w.unminimize();
         let _ = w.set_focus();
     }
+    // O ponto das perdidas de novo, fora da thread principal (perdidas.rs).
+    if let Some(t) = app.try_state::<Arc<Telefone>>() {
+        let t = Arc::clone(&t);
+        tauri::async_runtime::spawn(async move { t.reaplica_perdidas() });
+    }
 }
 
 pub fn titulo(flavor: Flavor) -> &'static str {
@@ -51,10 +57,13 @@ pub fn titulo(flavor: Flavor) -> &'static str {
     }
 }
 
+/// O id do icone da bandeja (o ponto das perdidas troca o icone dele).
+pub const BANDEJA: &str = "hexagon-call";
+
 /// O icone do flavor: o do Hexagon Call vai no executavel (icons/icon.png);
 /// o do M Calls entra na hora, pelo arquivo de preferencias, sem compilar de
 /// novo.
-fn icone(app: &tauri::App, flavor: Flavor) -> Option<tauri::image::Image<'static>> {
+pub fn icone_do_flavor(app: &AppHandle, flavor: Flavor) -> Option<tauri::image::Image<'static>> {
     match flavor {
         Flavor::Hexagon => app
             .default_window_icon()
@@ -71,6 +80,14 @@ fn icone(app: &tauri::App, flavor: Flavor) -> Option<tauri::image::Image<'static
 #[tauri::command]
 fn estado(t: Tel<'_>) -> Estado {
     t.estado()
+}
+
+/// Alguem mexeu na tela de Chamadas: as perdidas foram vistas. Assincrono de
+/// proposito: fora da thread principal, que a bandeja usa.
+#[tauri::command]
+async fn viu_perdidas(t: Tel<'_>) -> Result<(), String> {
+    t.viu_perdidas();
+    Ok(())
 }
 
 #[tauri::command]
@@ -501,9 +518,9 @@ fn bandeja(app: &tauri::App, flavor: Flavor) -> tauri::Result<()> {
     )?;
     let sair = MenuItem::with_id(app, "sair", "Sair", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&abrir, &PredefinedMenuItem::separator(app)?, &sair])?;
-    let icone = icone(app, flavor)
+    let icone = icone_do_flavor(app.handle(), flavor)
         .ok_or_else(|| tauri::Error::InvalidIcon(std::io::Error::other("sem icone")))?;
-    TrayIconBuilder::with_id("hexagon-call")
+    TrayIconBuilder::with_id(BANDEJA)
         .icon(icone)
         .tooltip(titulo(flavor))
         .menu(&menu)
@@ -606,7 +623,7 @@ fn main() -> std::process::ExitCode {
             if let Some(w) = app.get_webview_window("principal") {
                 let _ = w.set_title(titulo(flavor));
                 if flavor == Flavor::Mcalls
-                    && let Some(i) = icone(app, flavor)
+                    && let Some(i) = icone_do_flavor(app.handle(), flavor)
                 {
                     let _ = w.set_icon(i);
                 }
@@ -626,6 +643,7 @@ fn main() -> std::process::ExitCode {
         })
         .invoke_handler(tauri::generate_handler![
             estado,
+            viu_perdidas,
             liga,
             atende,
             desliga,

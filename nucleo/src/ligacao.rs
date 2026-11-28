@@ -108,7 +108,9 @@ impl Fim {
             Self::AtendidaEmOutro => "Atendida em outro ramal".into(),
             Self::Recusada => "Ligação recusada".into(),
             Self::Ocupado => "Ocupado: o ramal está em outra ligação (486)".into(),
-            Self::Offline => "O ramal está offline (480)".into(),
+            // O 480 vem do aparelho desligado e tambem da fila sem ninguem livre:
+            // "offline" enganava no segundo caso.
+            Self::Offline => "Indisponível agora (480)".into(),
             Self::NaoExiste => "Esse ramal ou número não existe (404)".into(),
             Self::SemResposta => "Ninguém respondeu: o PBX desistiu (408)".into(),
             Self::Transferida => "Ligação transferida".into(),
@@ -178,7 +180,7 @@ mod testes {
 
     #[test]
     fn a_frase_leva_o_codigo_quando_ajuda() {
-        assert_eq!(Fim::Offline.texto(), "O ramal está offline (480)");
+        assert_eq!(Fim::Offline.texto(), "Indisponível agora (480)");
         assert_eq!(Fim::Falha(503).texto(), "A ligação falhou (503)");
         assert!(Fim::Desligou.foi_atendida());
         assert!(!Fim::Ocupado.foi_atendida());

@@ -10,7 +10,7 @@
 
 use nucleo::conta::{Conta, ErroConta, escreve_contas, le_contas};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -737,6 +737,53 @@ impl Guarda {
         Ok(nomes)
     }
 
+    // ---- Numeros sem presenca de verdade (fila, grupo de ramais, siga-me) ----
+
+    /// Os numeros que tocaram com a presenca dizendo Offline. O chan_sip manda o
+    /// mesmo "Not online" para uma fila e para um aparelho desligado, e so ligando
+    /// se ve a diferenca: a tela nao mostra Offline para eles. Um por linha em
+    /// `sem-presenca.txt`; da para acrescentar a mao (a fila em que o proprio
+    /// ramal esta responde 480 para ele e nunca toca).
+    pub fn sem_presenca(&self) -> BTreeSet<String> {
+        le_texto(&self.arquivo("sem-presenca.txt"))
+            .map(|t| {
+                t.lines()
+                    .map(str::trim)
+                    .filter(|l| !l.is_empty() && !l.starts_with('#'))
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Acrescenta um numero no fim do arquivo (o que foi escrito a mao fica como
+    /// esta); `false` quando ja estava.
+    pub fn marca_sem_presenca(&self, ramal: &str) -> Result<bool, String> {
+        if ramal.is_empty() || ramal.chars().any(|c| c.is_control() || c == '#') {
+            return Err("número inválido".into());
+        }
+        let _vez = self.trava_escrita();
+        let caminho = self.arquivo("sem-presenca.txt");
+        let mut texto = match le_texto(&caminho) {
+            Ok(t) => t,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::from(
+                "# Numeros que tocaram com a presenca Offline (fila, grupo de ramais, siga-me):\n\
+                 # o app nao mostra Offline para eles. Um por linha; da para acrescentar a mao.\n",
+            ),
+            Err(e) => return Err(format!("{}: {e}", caminho.display())),
+        };
+        if texto.lines().any(|l| l.trim() == ramal) {
+            return Ok(false);
+        }
+        if !texto.is_empty() && !texto.ends_with('\n') {
+            texto.push('\n');
+        }
+        texto.push_str(ramal);
+        texto.push('\n');
+        grava_inteiro(&caminho, &texto, false)?;
+        Ok(true)
+    }
+
     pub fn conversas(&self) -> Vec<ItemConversa> {
         self.linhas("conversas.txt")
             .filter_map(|c| {
@@ -1338,6 +1385,27 @@ mod testes {
         fs::write(&arquivo, "[nomes]\n1002 = \"Recepção\"\n1004 = ").unwrap();
         assert!(g.grava_nome("1005", "Compras").is_err());
         assert!(fs::read_to_string(&arquivo).unwrap().contains("Recepção"));
+    }
+
+    #[test]
+    fn numeros_sem_presenca_acrescentam_sem_apagar_o_que_foi_escrito() {
+        let g = Guarda::em(&pasta_de_teste("sem-presenca"));
+        let arquivo = g.pasta().join("sem-presenca.txt");
+        let _ = fs::remove_file(&arquivo);
+        assert!(g.sem_presenca().is_empty());
+        assert!(g.marca_sem_presenca("1050").unwrap());
+        assert!(!g.marca_sem_presenca("1050").unwrap());
+        assert!(g.marca_sem_presenca("").is_err());
+        assert!(g.marca_sem_presenca("10\n51").is_err());
+        // O que o administrador escreveu (comentario, linha sem quebra no fim)
+        // fica, e o numero novo vai para uma linha propria.
+        fs::write(&arquivo, "# filas da empresa\n1060\n  1061  ").unwrap();
+        assert!(!g.marca_sem_presenca("1061").unwrap());
+        assert!(g.marca_sem_presenca("1062").unwrap());
+        let texto = fs::read_to_string(&arquivo).unwrap();
+        assert!(texto.starts_with("# filas da empresa\n1060\n  1061  \n1062\n"));
+        let todos: Vec<_> = g.sem_presenca().into_iter().collect();
+        assert_eq!(todos, ["1060", "1061", "1062"]);
     }
 
     #[cfg(unix)]

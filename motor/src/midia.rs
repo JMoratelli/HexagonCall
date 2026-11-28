@@ -12,7 +12,7 @@ use nucleo::sdp::Codec;
 use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 use tokio::net::UdpSocket;
 use tokio::sync::watch;
@@ -246,6 +246,14 @@ type Tons = Arc<std::sync::Mutex<std::collections::VecDeque<u8>>>;
 /// A gravacao, que comeca e para no meio da ligacao.
 type Gravacao = Arc<std::sync::Mutex<Option<Box<dyn Gravador>>>>;
 
+/// O pico de cada lado desde a ultima leitura (0 a 32767): a tela mostra quem
+/// esta falando. Um `fetch_max` por quadro, de 20 em 20 ms.
+#[derive(Default)]
+struct Niveis {
+    nosso: AtomicU32,
+    deles: AtomicU32,
+}
+
 /// O que a ligacao muda de fora no laco do audio.
 #[derive(Clone)]
 struct Controles {
@@ -254,6 +262,16 @@ struct Controles {
     fonte_nova: FonteNova,
     tons: Tons,
     gravacao: Gravacao,
+    niveis: Arc<Niveis>,
+}
+
+/// A maior amplitude do quadro.
+fn pico(quadro: &Quadro) -> u32 {
+    quadro
+        .iter()
+        .map(|a| u32::from(a.unsigned_abs()))
+        .max()
+        .unwrap_or(0)
 }
 
 pub struct Sessao {
@@ -295,6 +313,7 @@ impl Sessao {
             fonte_nova: Arc::default(),
             tons: Arc::default(),
             gravacao: Arc::default(),
+            niveis: Arc::default(),
         };
         let tarefa = tokio::spawn(laco(
             socket,
@@ -346,6 +365,16 @@ impl Sessao {
 
     pub fn mudo(&self, sim: bool) {
         self.controles.mudo.store(sim, Ordering::Relaxed);
+    }
+
+    /// O pico do que saiu (ja com o mudo) e do que tocou aqui desde a ultima
+    /// leitura, de 0 a 32767; ler zera.
+    pub fn niveis(&self) -> (u16, u16) {
+        let le = |n: &AtomicU32| u16::try_from(n.swap(0, Ordering::Relaxed)).unwrap_or(u16::MAX);
+        (
+            le(&self.controles.niveis.nosso),
+            le(&self.controles.niveis.deles),
+        )
     }
 
     /// Depois de uma renegociacao: o endereco novo do outro lado (None mantem
@@ -401,6 +430,7 @@ async fn laco(
         fonte_nova,
         tons,
         gravacao,
+        niveis,
     } = controles;
     let mut tom: Option<TomEmCurso> = None;
     let mut pausa: u16 = 0;
@@ -514,6 +544,8 @@ async fn laco(
                 // Quem pos em espera nao ouve o outro lado.
                 let ouvido = if envio == Envio::Silencio { &SILENCIO } else { &tocado };
                 destino.escreve(ouvido);
+                niveis.nosso.fetch_max(pico(&quadro), Ordering::Relaxed);
+                niveis.deles.fetch_max(pico(ouvido), Ordering::Relaxed);
                 if let Ok(mut g) = gravacao.lock()
                     && let Some(g) = g.as_mut()
                 {

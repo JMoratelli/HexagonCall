@@ -100,8 +100,8 @@ O que está validado, o que falta e as decisões tomadas. Atualizar ao fim de ca
   HTTP/1.1 (o `set_force_http1` é do 3.4). Correção (1.1.1): o atualizador do Linux passou para o `ureq` (Rust puro,
   só HTTP/1.1, rustls com os certificados da Mozilla, gzip, proxy pelo `HTTPS_PROXY`), conferido contra o GitHub de
   verdade (lista, `SHA256SUMS`, a AppImage de 97 MB em 6 s, sha256 certo). Quem tem a 1.0.0 ou a 1.1.0 no Linux
-  precisa trocar a AppImage à mão uma vez: a velha cai antes de se atualizar. O Windows usa o `Windows.Web.Http`, e
-  a checagem contra o GitHub de verdade ainda não foi vista nele.
+  precisa trocar a AppImage à mão uma vez: a velha cai antes de se atualizar. O Windows usa o `Windows.Web.Http`;
+  a atualização contra o GitHub de verdade foi conferida por ele numa máquina, à mão (28/11).
 - **Release 1.1.0** (pedido dele em 27/11, menor e não 1.0.1 porque traz função nova): os toques fortes, o
   `ocultaConfig`, o status com não perturbe e a correção do registro que o offline do próprio ramal derrubava.
 - **A primeira conta com `ocultaConfig`** (pedido dele em 27/11, para o LinuxMachines instalar o M Calls): sem conta
@@ -180,6 +180,54 @@ aprender o fundo em meio segundo); o ruído constante cai mais de 6 dB.
 - [ ] Uma ligação de verdade com caixa de som em vez de headset: o outro lado não deve ouvir o próprio eco.
 - [ ] A voz mais nítida numa ligação com ruído do outro lado.
 
+## Decisões (28/11/2026)
+
+Das ideias para a experiência que ele escolheu em 28/11: atender pelo botão do headset, o indicador de qualidade da
+ligação (dizendo se o problema é de quem recebe ou da conexão daqui com o PBX), a pausa na fila, os efeitos de
+chamada (mockup primeiro) e as três abaixo, feitas. Clicar num número em qualquer programa e o ChamadoJá na ligação
+ficam para depois.
+
+- **Perdidas repetidas numa linha só** (pedido dele): as perdidas seguidas do mesmo número, do mesmo tipo (Perdida,
+  Recusada, Não perturbe), da mesma conta e do mesmo dia, sem outra ligação desse número no meio, viram uma linha
+  com o selo de quantas foram ("desde 09:12" diz a primeira). Selecionar para excluir marca todas as dela, e a
+  confirmação conta as ligações, não as linhas. Revisão adversarial (28/11), corrigido: uma perdida nova do mesmo
+  número entrava escondida num grupo já marcado (a linha aparecia desmarcada e o Excluir apagava as de dentro);
+  agora marcadas e desmarcadas não se juntam. A seleção fica só no que está na tela (passou das 200 linhas, sai da
+  seleção), e o "Marcar todas"/"Desmarcar" conta por chave; ligação do número por outra conta no meio quebra o
+  grupo; o dia do grupo tem o ano.
+- **Fila sem "Offline"**: o chan_sip manda para uma fila exatamente o mesmo NOTIFY de um aparelho desligado
+  (closed, "Not online"; conferido em 28/11 no PBX de verdade, assinando a presença de uma fila e a de um ramal livre). Só ligando se vê a diferença:
+  o número que toca (180/183) com a presença Offline é fila, grupo ou siga-me, vai para o `sem-presenca.txt` e
+  deixa de mostrar Offline. Só o 180: o correio de voz de um aparelho desligado atende direto, e o recado de
+  "indisponível" pode vir como 183 (áudio antes de atender). A fila em
+  que o próprio ramal está responde 480 para ele e nunca toca: essa só escrevendo no arquivo. O 480 passou de "O
+  ramal está offline" para "Indisponível agora (480)", que vale para os dois casos.
+- **Perdidas à vista**: a perdida (também a recusada pelo não perturbe e a que chegou com outra ligação em
+  andamento, que antes ficava como "Recusada" e agora é "Em outra ligação") põe o ponto vermelho no ícone da
+  bandeja (a dica diz quantas), o número no Chamadas do menu e, no Linux, o contador do Unity no atalho do menu (o
+  KDE mostra no gerenciador de tarefas; a conexão do D-Bus fica aberta, senão ele apaga o número); no Windows, o
+  ícone sobreposto na barra de tarefas, reaplicado quando a janela volta da bandeja. Fora do não perturbe, também vai
+  para o aviso do sistema, com "Ligar de volta" (liga pela tela, como o botão dela): um aviso por número, que conta
+  as repetidas no lugar de empilhar, com o nome dado em Ramais. A recusada por quem usa não conta. Zera quando
+  alguém mexe na tela em Chamadas (clique, tecla, roda, o mouse andando); o foco sozinho não, porque o próprio
+  toque traz a janela para a frente sem ninguém na mesa (achado da revisão adversarial: com o foco valendo, as
+  perdidas sumiam a cada ligação que chegava). Contar, zerar e reaplicar vão um de cada vez (uma trava que a thread
+  principal nunca pega), e os avisos do Linux fecham e abrem sob a mesma trava. Conferido num KWin virtual com um
+  PBX falso (duas perdidas com a tela em Conversas: 1, 2, e zera ao clicar em Chamadas); a bandeja, o contador do
+  KDE e o aviso de verdade ainda não foram vistos na sessão dele.
+- **Efeitos de chamada** (pedido dele: "estilo hive nosso, algo bem moderno"; mockup aprovado em 28/11, "lindão"):
+  o avatar num favo; chegando, três favos saem dele em ondas, a colmeia do fundo acende em anéis a partir dele e o
+  Atender brilha; ligando, três favinhos acendem em sequência e, tocando, as ondas saem na cor da marca; atendeu, o
+  favo encaixa com um estalo e a colmeia pisca; em ligação, o favo respira com a voz do outro lado e a sua aparece
+  numa barrinha no Mudo; no fim, o favo encolhe e a duração fica 2 s antes de o teclado voltar; caiu, o favo se
+  parte nos seis lados e fica com "Ligar de novo" até fechar (Esc fecha, digitar volta ao teclado); a perdida sai
+  para o lado do histórico, onde a linha nova entra acesa. Em outra aba, a faixa desce com uma luz correndo
+  enquanto toca. As três dúvidas do mockup ficaram como nele (o caiu até fechar, a colmeia só na que chega, a
+  barrinha do microfone fica). A voz vem do motor: o pico de cada lado por quadro (`fetch_max`, de 20 em 20 ms),
+  lido de 80 em 80 ms só com a janela visível. Por ora o "caiu" é a atendida que acabou em falha; o indicador de
+  qualidade (rede e PBX) vai dar o motivo de verdade. Conferido no KWin virtual com o PBX falso (chegando, perdida);
+  atendida, fim e caiu só no mockup.
+
 ## Backlog do Windows
 
 Só depois que o app do Linux estiver pronto. **Ao fazer e validar cada item no Windows, retirá-lo desta lista.**
@@ -188,6 +236,8 @@ Só depois que o app do Linux estiver pronto. **Ao fazer e validar cada item no 
 - [ ] Pausar música e vídeo ao atender: no Windows não faz nada.
 - [ ] Cancelamento de eco, ruído e voz mais nítida numa ligação de verdade (os testes de `som/src/eco.rs` passam no
   Windows, mas nada foi ouvido nele: a VM de teste não tem placa de som).
+- [ ] O aviso da perdida (toast com "Ligar de volta", um por número) e o ponto vermelho sobreposto na barra de
+  tarefas (28/11): escritos, não vistos no Windows.
 - [ ] Aviso de mensagem nova como toast (no Linux é a notificação com "Responder"; no Windows, por ora, só o som e o
   número na aba Conversas: `notificacao.rs`, `mensagem`).
 

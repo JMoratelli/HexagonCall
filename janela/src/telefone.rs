@@ -15,9 +15,10 @@ use crate::notificacao::Notificacoes;
 use motor::midia::{Destino, Fonte, Silencio};
 use motor::{Evento, Opcoes, Registro, Ua};
 use nucleo::conta::Conta;
+use nucleo::ligacao::Fim;
 use nucleo::presenca::Presenca;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant, SystemTime};
 use tauri::{AppHandle, Emitter, Manager};
@@ -66,6 +67,15 @@ pub struct Telefone {
     gravacoes: Option<Gravacoes>,
     /// O ultimo estado de cada ramal assinado (Ramais), para a tela reaberta.
     presencas: Mutex<HashMap<String, Presenca>>,
+    /// Fila, grupo de ramais, siga-me: tocaram com a presenca Offline
+    /// (`Guarda::sem_presenca`).
+    sem_presenca: Mutex<BTreeSet<String>>,
+    /// As perdidas que ninguem viu ainda (o ponto da bandeja, `perdidas.rs`).
+    perdidas: Mutex<u32>,
+    /// Uma vez por vez para mostrar as perdidas (contar, zerar, reaplicar): o
+    /// que sai na bandeja e na tela e sempre o numero de agora. A thread
+    /// principal nunca pega esta trava (a bandeja espera por ela).
+    publica: Mutex<()>,
 }
 
 /// Quantos ramais a conta principal assina, no maximo.
@@ -154,6 +164,9 @@ struct Chamada {
 /// O fim no historico de uma ligacao recusada pelo nao perturbe (a tela
 /// reconhece por este texto).
 const FIM_NAO_PERTURBE: &str = "Não perturbe";
+/// O fim no historico da que chegou com outra ligacao em andamento (recusada
+/// como ocupado, sem ninguem escolher): conta como perdida.
+const FIM_EM_OUTRA: &str = "Em outra ligação";
 
 /// Uma conta como a tela mostra.
 #[derive(Debug, Clone, Serialize)]
@@ -228,6 +241,8 @@ pub struct Estado {
     pub apelidos: std::collections::BTreeMap<String, String>,
     /// Ramal -> livre, ocupado, tocando, offline, desconhecida.
     pub presencas: HashMap<String, &'static str>,
+    /// As perdidas que ninguem viu ainda (o numero em Chamadas, no menu).
+    pub perdidas: u32,
 }
 
 /// O que chega na tela.
@@ -295,6 +310,24 @@ pub enum Aviso {
     AbreConversa {
         ramal: String,
     },
+    /// A voz de cada lado na ligacao atendida, de 80 em 80 ms: o pico desde o
+    /// aviso anterior, de 0 a 32767 (o favo respira com a do outro lado; a
+    /// sua aparece no botao Mudo).
+    Voz {
+        id: String,
+        eu: u16,
+        ele: u16,
+    },
+    /// As perdidas que ninguem viu ainda (0: foram vistas).
+    Perdidas {
+        n: u32,
+    },
+    /// "Ligar de volta" no aviso da perdida: a tela liga, como no botao dela.
+    Liga {
+        ramal: String,
+    },
+    /// O clique no aviso da perdida: a tela vai para Chamadas.
+    AbreChamadas,
     /// O microfone ou o alto-falante nao abriu: a ligacao segue em silencio
     /// daquele lado. `None` nos dois e "voltou" (trocou o microfone).
     SemAudio {
@@ -334,6 +367,7 @@ fn trava<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 impl Telefone {
     pub fn novo(app: AppHandle, guarda: Guarda) -> Arc<Self> {
         let flavor = guarda.preferencias().flavor;
+        let sem_presenca = guarda.sem_presenca();
         Arc::new(Self {
             app,
             guarda,
@@ -346,6 +380,9 @@ impl Telefone {
             musica: Musica::default(),
             gravacoes: Gravacoes::abre().map_err(|e| warn!("gravacoes: {e}")).ok(),
             presencas: Mutex::new(HashMap::new()),
+            sem_presenca: Mutex::new(sem_presenca),
+            perdidas: Mutex::new(0),
+            publica: Mutex::new(()),
         })
     }
 
@@ -448,6 +485,100 @@ impl Telefone {
                 debug!(%ramal, "presenca: {e}");
             }
         }
+    }
+
+    /// A presenca como a tela mostra: Offline de um numero que ja tocou com
+    /// ela (fila, grupo, siga-me) fica sem estado, porque ligar funciona.
+    fn presenca_vista(&self, ramal: &str, p: Presenca) -> &'static str {
+        if p == Presenca::Offline && trava(&self.sem_presenca).contains(ramal) {
+            return presenca_da_tela(Presenca::Desconhecida);
+        }
+        presenca_da_tela(p)
+    }
+
+    /// Uma ligacao nossa tocou para um numero que o PBX diz Offline: e fila,
+    /// grupo de ramais ou siga-me, nao um aparelho so. So pelo 180: o correio
+    /// de voz de um aparelho desligado atende direto, e o recado de
+    /// "indisponivel" vem como 183 (audio antes de atender); nenhum dos dois
+    /// pode apagar o Offline dele.
+    fn tocou_sem_aparelho(&self, id: &str) {
+        let Some(ramal) = trava(&self.chamadas)
+            .get(id)
+            .filter(|c| !c.entrada)
+            .map(|c| c.ramal.clone())
+        else {
+            return;
+        };
+        if trava(&self.presencas).get(&ramal) != Some(&Presenca::Offline)
+            || !trava(&self.sem_presenca).insert(ramal.clone())
+        {
+            return;
+        }
+        if let Err(e) = self.guarda.marca_sem_presenca(&ramal) {
+            warn!("sem-presenca: {e}");
+        }
+        let estado = self.presenca_vista(&ramal, Presenca::Offline);
+        self.avisa(Aviso::Presenca { ramal, estado });
+    }
+
+    /// Uma ligacao chegou e ninguem atendeu (a que o nao perturbe recusou e a
+    /// que chegou com outra em andamento tambem): conta no ponto da bandeja e,
+    /// fora do nao perturbe, vai para o aviso com "Ligar de volta". A recusada
+    /// por quem usa nao conta: foi escolha dela. Conta mesmo com a janela na
+    /// frente: quem trouxe a janela pode ter sido o proprio toque, com ninguem
+    /// na mesa. Quem zera e a tela, quando alguem mexe nela em Chamadas.
+    fn perdeu(&self, item: &ItemHistorico, avisar: bool) {
+        let _vez = trava(&self.publica);
+        let n = {
+            let mut p = trava(&self.perdidas);
+            *p = p.saturating_add(1);
+            *p
+        };
+        crate::perdidas::mostra(&self.app, self.guarda.preferencias().flavor, n);
+        self.avisa(Aviso::Perdidas { n });
+        if avisar {
+            let nome = self
+                .guarda
+                .nomes()
+                .remove(&item.ramal)
+                .or_else(|| item.nome.clone());
+            self.notificacoes
+                .perdida(&self.app, &item.ramal, nome.as_deref());
+        }
+    }
+
+    /// Alguem mexeu na tela de Chamadas: as perdidas foram vistas, e o ponto, o
+    /// numero e os avisos delas saem.
+    pub fn viu_perdidas(&self) {
+        let _vez = trava(&self.publica);
+        if std::mem::take(&mut *trava(&self.perdidas)) == 0 {
+            return;
+        }
+        crate::perdidas::mostra(&self.app, self.guarda.preferencias().flavor, 0);
+        self.notificacoes.fecha_perdidas();
+        self.avisa(Aviso::Perdidas { n: 0 });
+    }
+
+    /// Mostra de novo as perdidas (a janela voltou da bandeja: no Windows o
+    /// botao da barra de tarefas e outro, sem o ponto).
+    pub fn reaplica_perdidas(&self) {
+        let _vez = trava(&self.publica);
+        let n = *trava(&self.perdidas);
+        if n > 0 {
+            crate::perdidas::mostra(&self.app, self.guarda.preferencias().flavor, n);
+        }
+    }
+
+    /// "Ligar de volta" no aviso da perdida.
+    pub fn liga_de_volta(&self, ramal: &str) {
+        self.avisa(Aviso::Liga {
+            ramal: ramal.to_string(),
+        });
+    }
+
+    /// O clique no corpo do aviso da perdida.
+    pub fn abre_chamadas(&self) {
+        self.avisa(Aviso::AbreChamadas);
     }
 
     /// Um ramal novo (ligou ou mandou mensagem): assina a presenca dele.
@@ -643,8 +774,9 @@ impl Telefone {
             apelidos: self.guarda.nomes(),
             presencas: trava(&self.presencas)
                 .iter()
-                .map(|(r, p)| (r.clone(), presenca_da_tela(*p)))
+                .map(|(r, p)| (r.clone(), self.presenca_vista(r, *p)))
                 .collect(),
+            perdidas: *trava(&self.perdidas),
             tem_chaveiro: Guarda::tem_chaveiro(),
             pasta: self.guarda.pasta().display().to_string(),
             toques: som::toque::toques()
@@ -916,7 +1048,12 @@ impl Telefone {
                     self.avisa(Aviso::Mensagem { item });
                 }
                 Evento::Recebendo { id, de, nome } => self.chegando(&conta, id, de, nome).await,
-                Evento::Tocando { id } => self.avisa(Aviso::Tocando { id }),
+                Evento::Tocando { id, codigo } => {
+                    if codigo == 180 {
+                        self.tocou_sem_aparelho(&id);
+                    }
+                    self.avisa(Aviso::Tocando { id });
+                }
                 Evento::Atendida { id, codec } => {
                     self.notificacoes.fecha(&id);
                     self.para_o_toque();
@@ -931,6 +1068,9 @@ impl Telefone {
                     let tel = Arc::clone(&self);
                     let vigiada = id.clone();
                     tauri::async_runtime::spawn(async move { tel.vigia_microfone(vigiada).await });
+                    let tel = Arc::clone(&self);
+                    let falando = id.clone();
+                    tauri::async_runtime::spawn(async move { tel.mostra_a_voz(falando).await });
                     let faltando = trava(&self.chamadas)
                         .get(&id)
                         .map(|c| c.faltando.clone())
@@ -977,6 +1117,12 @@ impl Telefone {
                     if let Err(e) = self.guarda.acrescenta_historico(&item) {
                         warn!("historico: {e}");
                     }
+                    let nao_perturbe = c.motivo == Some(FIM_NAO_PERTURBE);
+                    let em_outra = c.motivo == Some(FIM_EM_OUTRA);
+                    if c.entrada && !c.atendida && (nao_perturbe || em_outra || fim == Fim::Perdida)
+                    {
+                        self.perdeu(&item, !nao_perturbe);
+                    }
                     self.assina_novo(&conta, &item.ramal);
                     self.avisa(Aviso::Encerrada { id, item });
                 }
@@ -988,10 +1134,8 @@ impl Telefone {
                 Evento::Pbx { resposta } => self.resposta_do_pbx(&conta, resposta),
                 Evento::Presenca { ramal, presenca } => {
                     trava(&self.presencas).insert(ramal.clone(), presenca);
-                    self.avisa(Aviso::Presenca {
-                        ramal,
-                        estado: presenca_da_tela(presenca),
-                    });
+                    let estado = self.presenca_vista(&ramal, presenca);
+                    self.avisa(Aviso::Presenca { ramal, estado });
                 }
                 Evento::PresencaEncerrada { ramal } => {
                     // O PBX encerrou: na proxima renovacao do registro, assina de novo.
@@ -1039,6 +1183,38 @@ impl Telefone {
                     alternativas,
                 });
             }
+        }
+    }
+
+    /// A voz dos dois lados para a tela, enquanto a ligacao durar. Com a janela
+    /// escondida, nada sai (a visibilidade e conferida a cada segundo).
+    async fn mostra_a_voz(self: Arc<Self>, id: String) {
+        let mut visivel = true;
+        for volta in 0u32.. {
+            tokio::time::sleep(Duration::from_millis(80)).await;
+            if !trava(&self.chamadas).contains_key(&id) {
+                return;
+            }
+            if volta % 12 == 0 {
+                visivel = self
+                    .app
+                    .get_webview_window("principal")
+                    .is_some_and(|w| w.is_visible().unwrap_or(false));
+            }
+            if !visivel {
+                continue;
+            }
+            let Ok((eu, ele)) = self
+                .ua_da_chamada(&id)
+                .and_then(|ua| ua.niveis(&id).map_err(|e| e.to_string()))
+            else {
+                continue;
+            };
+            self.avisa(Aviso::Voz {
+                id: id.clone(),
+                eu,
+                ele,
+            });
         }
     }
 
@@ -1170,6 +1346,9 @@ impl Telefone {
                 }
             } else {
                 info!(%id, "ja tem ligacao: recusando a que chegou");
+                if let Some(c) = trava(&self.chamadas).get_mut(&id) {
+                    c.motivo = Some(FIM_EM_OUTRA);
+                }
             }
             if let Some(ua) = self.ua_da_conta(conta) {
                 let _ = ua.desliga(&id).await;

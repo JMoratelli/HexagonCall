@@ -69,7 +69,7 @@ const state = {
   open: null, cq: '', drafts: {}, naoLidas: {},
   form: null, remover: null, devices: null, devErro: null, autostart: null,
   grav: null, retencao: null, ouvindo: null,
-  sel: null, apelidos: {}, presencas: {}, editaNome: null,
+  sel: null, linhas: [], fim: null, apelidos: {}, presencas: {}, editaNome: null,
   // A atualizacao: versao instalada, se este sistema atualiza sozinho, a release achada e a fase
   // (disponivel, baixando, instalando, erro). "Depois" esconde aquela versao por um dia.
   versao: '', atualizaSozinho: false, atu: null, atuDepois: null, procurando: false
@@ -198,11 +198,13 @@ function renderStrip () {
     ctl = '<button type="button" class="cbtn" data-act="mute" aria-pressed="' + !!c.muted + '">' + ic(c.muted ? 'micoff' : 'mic') + 'Mudo</button><button type="button" class="cbtn" data-act="go" data-v="chamadas">Abrir</button><button type="button" class="cbtn hang" data-act="hangup">' + ic('hang') + 'Desligar</button>'
   }
   el.innerHTML = tx + ctl
+  // Em outra aba, a faixa desce do topo, com uma luz correndo embaixo enquanto toca.
+  el.classList.toggle('fx-tocando', c.kind === 'incoming')
+  el.classList.toggle('fx-entra', recente('entra', 500) || recente('liga', 500))
 }
 
 // ---- Chamadas ----
 function renderChamadas () {
-  state.missedNew = 0
   if (!state.contas.length) {
     $('#content').innerHTML = '<div class="boasvindas"><div class="lattice" aria-hidden="true"></div><span class="marca">' + MARK + '</span><h2>Cadastre o seu ramal para começar</h2>' +
       '<p>O ramal, o servidor do PBX e a senha. A senha fica no chaveiro do sistema' + (state.temChaveiro ? '' : ' (nesta máquina não há chaveiro: ela fica num arquivo só seu)') + '.</p>' +
@@ -215,14 +217,98 @@ function renderChamadas () {
 function renderLeft () {
   const el = $('#lpanel'); if (!el) return
   const c = state.call
+  el.classList.remove('fx-volta')
   let html
-  if (!c) html = dialPanel()
+  if (!c && state.fim) html = fimPanel(state.fim)
+  else if (!c) html = dialPanel()
   else if (c.kind === 'incoming') html = incomingPanel(c)
   else if (c.kind === 'active' && state.panel === 'dtmf') html = dtmfPanel(c)
   else if (c.kind === 'active' && state.panel === 'transfer') html = transferPanel(c)
   else html = callPanel(c)
   el.innerHTML = '<div class="lattice" aria-hidden="true"></div>' + html
+  if (c && (c.kind === 'incoming' || (c.kind === 'active' && recente('conectou', 900)))) favoOnda(el, c.kind === 'active')
+  if (!c && !state.fim && Date.now() - fx.voltou < 400) el.classList.add('fx-volta')
   focusDial()
+}
+
+// ---- Efeitos de chamada (mockup aprovado em 28/11) ----
+// O avatar fica num favo (o hexagono de lado reto da colmeia do fundo): ondas de favo saem dele enquanto toca, ele
+// encaixa com um estalo quando atendem, respira com a voz do outro lado, encolhe no fim e se parte quando a ligacao
+// cai. Os de uma vez so (entrar, estalo) valem logo depois do aviso: um redesenho mais tarde (mudo, espera) nao repete.
+const fx = { tipo: null, desde: 0, voltou: 0 }
+const marcaFx = tipo => { fx.tipo = tipo; fx.desde = Date.now() }
+const recente = (tipo, ms) => fx.tipo === tipo && Date.now() - fx.desde < ms
+const HEX = '<polygon points="25,6.7 75,6.7 100,50 75,93.3 25,93.3 0,50"/>'
+// Os seis lados do favo e para onde cada um voa quando a ligacao cai.
+const CACOS = [
+  [25, 6.7, 75, 6.7, 0, -16, -14], [75, 6.7, 100, 50, 14, -8, 18], [100, 50, 75, 93.3, 14, 8, -12],
+  [75, 93.3, 25, 93.3, 0, 16, 16], [25, 93.3, 0, 50, -14, 8, -18], [0, 50, 25, 6.7, -14, -8, 12]
+].map(([x1, y1, x2, y2, dx, dy, r]) => '<line x1="' + x1 + '" y1="' + y1 + '" x2="' + x2 + '" y2="' + y2 + '" style="--dx:' + dx + ';--dy:' + dy + ';--rot:' + r + 'deg"/>').join('')
+const svgFx = (cls, corpo) => '<svg class="' + cls + '" viewBox="0 0 100 100" aria-hidden="true">' + corpo + '</svg>'
+// modo: chega, chama, toca, fala, fim ou caiu.
+function palco (d, modo, estalo) {
+  return '<span class="palco ' + modo + (estalo ? ' fx-conectou' : '') + '" id="palco">' + svgFx('tile', HEX) +
+    (modo === 'chega' || modo === 'toca' ? svgFx('ondas', HEX + HEX + HEX) : '') + (estalo ? svgFx('estalo', HEX) : '') +
+    (modo === 'caiu' ? svgFx('cacos', CACOS) : '') + av(d, 'xl') + '</span>'
+}
+// A colmeia do fundo acende em aneis a partir de quem liga (ou pisca uma vez, quando atendem).
+function favoOnda (el, umaVez) {
+  el.insertAdjacentHTML('afterbegin', '<div class="favo-onda' + (umaVez ? ' uma' : '') + '" aria-hidden="true"></div>')
+  const p = el.querySelector('.palco'), o = el.querySelector('.favo-onda')
+  if (!p || !o) return
+  const a = p.getBoundingClientRect(), b = el.getBoundingClientRect()
+  o.style.setProperty('--cx', (a.left - b.left + a.width / 2) + 'px')
+  o.style.setProperty('--cy', (a.top - b.top + el.scrollTop + a.height / 2) + 'px')
+}
+// O fim fica no lugar do teclado por um instante (o que caiu, ate fechar) e o teclado volta deslizando.
+const DURA_FIM = { caiu: 0, perdida: 470, normal: 1900 }
+let fimT = null
+function comecaFim (c, it) {
+  const tipo = c.kind === 'incoming' ? 'perdida' : it.atendida && /^A ligação falhou/.test(it.fim) ? 'caiu' : 'normal'
+  clearTimeout(fimT)
+  state.fim = { tipo, item: it, r: c.r, conta: c.conta, desde: Date.now(), ate: Date.now() + DURA_FIM[tipo] }
+  if (DURA_FIM[tipo]) fimT = setTimeout(acabaFim, DURA_FIM[tipo])
+}
+function acabaFim () {
+  clearTimeout(fimT)
+  if (!state.fim) return
+  state.fim = null; fx.voltou = Date.now()
+  if (state.view === 'chamadas' && !state.call) renderLeft()
+}
+function fimPanel (f) {
+  const d = pessoa(f.r), it = f.item
+  if (f.tipo === 'perdida') {
+    return '<div class="cp fx-sai"><div class="cp-who">' + palco(d, 'chega') + '<b>' + esc(d.n) + '</b><small>' + esc(f.r) + '</small></div><span class="cp-state">' + ic('pin') + 'Chamada recebida</span></div>'
+  }
+  if (f.tipo === 'caiu') {
+    return '<div class="cp"><div class="cp-who">' + palco(d, 'caiu') + '<b>' + esc(d.n) + '</b><small>' + esc(f.r) + '</small></div>' +
+      '<div class="fim-tx caiu" role="alert"><b>' + ic('alert') + 'A ligação caiu</b><span>Aos ' + fmt(it.duracao) + ' de ligação.</span></div></div>' +
+      '<div class="two"><button type="button" class="ghostbtn" data-act="fim-fecha">Fechar</button><button type="button" class="callbtn" data-act="fim-religa" data-v="' + esc(f.r) + '">' + ic('phone') + 'Ligar de novo</button></div>'
+  }
+  const quem = it.fim === 'O outro lado desligou' ? esc(primeiro(d)) + ' desligou' : esc(it.fim)
+  return '<div class="cp"><div class="cp-who">' + palco(d, 'fim') + '<b>' + esc(d.n) + '</b><small>' + esc(f.r) + '</small></div>' +
+    (it.atendida ? '<div class="fim-dur">' + fmt(it.duracao) + '</div>' : '') +
+    '<div class="fim-tx" role="status"><b>' + (it.atendida ? 'Ligação encerrada' : 'Não completou') + '</b><span>' + quem + '</span></div>' +
+    '<div class="fim-barra" style="--t:' + (f.ate - f.desde) + 'ms"></div></div>'
+}
+// A voz: o pico (0 a 32767) na escala do ouvido, de -48 dBFS (nada) a -10 dBFS (cheio). Sobe na hora e desce
+// devagar, como um medidor.
+const nivelDe = p => p > 0 ? Math.min(1, Math.max(0, (20 * Math.log10(p / 32768) + 48) / 38)) : 0
+function mostraVoz (a) {
+  const c = state.call
+  if (!daChamada(a.id) || c.kind !== 'active') return
+  const v = c.voz || (c.voz = { ele: 0, eu: 0 })
+  v.ele = Math.max(nivelDe(a.ele), v.ele * 0.6); v.eu = Math.max(nivelDe(a.eu), v.eu * 0.6)
+  const p = $('#palco'), m = $('#nivel-mic')
+  if (p && p.classList.contains('fala')) { p.style.setProperty('--lv', v.ele.toFixed(2)); p.classList.toggle('quieto', v.ele < 0.05) }
+  if (m) m.style.setProperty('--mic', v.eu.toFixed(2))
+}
+// A linha nova do historico entra acesa; o selo das repetidas e o contador de Perdidas pulam.
+function acendeNova (it) {
+  const linha = $('.rlist .hrow'); if (!linha) return
+  linha.classList.add('fx-nova'); if (perdida(it)) linha.classList.add('perdida')
+  const selo = linha.querySelector('.selo'); if (selo) selo.classList.add('fx-pop')
+  if (perdida(it)) { const n = $('.mseg [data-v="missed"] .n'); if (n) n.classList.add('fx-pop') }
 }
 function focusDial () {
   if (!finePointer() || state.view !== 'chamadas') return
@@ -264,10 +350,13 @@ function dialTarget () {
 }
 function callPanel (c) {
   const d = pessoa(c.r)
-  const who = '<div class="cp-who">' + av(d, 'xl') + '<b>' + esc(d.n) + '</b><small>' + esc(c.r) + '</small></div>'
   if (c.kind === 'outgoing') {
-    return '<div class="cp">' + who + '<span class="cp-state">' + ic('pout') + (c.tocando ? 'Tocando…' : 'Chamando…') + '</span></div><button type="button" class="hangbtn" data-act="hangup">' + ic('hang') + 'Cancelar</button>'
+    const estado = c.tocando ? ic('pout') + 'Tocando…' : '<span class="hexdots" aria-hidden="true"><i></i><i></i><i></i></span>Chamando…'
+    return '<div class="cp' + (recente('liga', 500) ? ' fx-entra' : '') + '"><div class="cp-who">' + palco(d, c.tocando ? 'toca' : 'chama') + '<b>' + esc(d.n) + '</b><small>' + esc(c.r) + '</small></div><span class="cp-state">' + estado + '</span></div>' +
+      '<button type="button" class="hangbtn" data-act="hangup">' + ic('hang') + 'Cancelar</button>'
   }
+  const conectou = recente('conectou', 900)
+  const who = '<div class="cp-who">' + palco(d, 'fala', conectou) + '<b>' + esc(d.n) + '</b><small>' + esc(c.r) + '</small></div>'
   const notas = (c.gravando ? ' · <b class="rec">gravando</b>' : '') + (c.held ? ' · <b>em espera</b>' : '') + (c.deles ? ' · <b>' + esc(primeiro(d)) + ' pôs em espera</b>' : '') + (c.muted ? ' · <b>mudo</b>' : '')
   const outra = (c.alternativas || [])[0]
   const trocar = '<button type="button" class="btn sm" data-act="pick" data-k="microfoneLigacao" data-pop aria-haspopup="dialog" aria-expanded="false" title="Microfone">' + (outra ? 'Outro' : 'Trocar') + '</button>'
@@ -277,9 +366,9 @@ function callPanel (c) {
   else if (c.semSom && c.micMudo) alerta = '<div class="alerta" role="status">' + ic('micoff') + '<div><b>Seu microfone está mudo</b><span>Está mudo no sistema (ou com o volume em zero).</span></div><button type="button" class="btn sm prim" data-act="tira-do-mudo">Tirar do mudo</button></div>'
   else if (c.semSom && outra) alerta = '<div class="alerta" role="status">' + ic('micoff') + '<div><b>Não te ouço</b><span>' + esc(outra.nome) + ' está captando som. Usar esse?</span></div><button type="button" class="btn sm prim" data-act="usa-microfone" data-v="' + esc(outra.id) + '">Usar</button>' + trocar + '</div>'
   else if (c.semSom) alerta = '<div class="alerta" role="status">' + ic('micoff') + '<div><b>Não te ouço</b><span>O microfone está mandando silêncio. Quer testar outro?</span></div>' + trocar + '</div>'
-  return '<div class="cp">' + who + '<div><div class="cp-timer" id="cp-timer">' + fmt((Date.now() - c.t0) / 1000) + '</div><div class="cp-q">' + ic('signal') + esc(c.codec || 'G.711') + ' · 8 kHz' + notas + '</div></div>' + alerta +
+  return '<div class="cp">' + who + '<div><div class="cp-timer' + (conectou ? ' fx-entra' : '') + '" id="cp-timer">' + fmt((Date.now() - c.t0) / 1000) + '</div><div class="cp-q">' + ic('signal') + esc(c.codec || 'G.711') + ' · 8 kHz' + notas + '</div></div>' + alerta +
     '<div class="cp-grid">' +
-    '<button type="button" class="cpb" data-act="mute" aria-pressed="' + !!c.muted + '">' + ic(c.muted ? 'micoff' : 'mic') + 'Mudo</button>' +
+    '<button type="button" class="cpb" data-act="mute" aria-pressed="' + !!c.muted + '">' + ic(c.muted ? 'micoff' : 'mic') + 'Mudo<span class="nivel-mic" id="nivel-mic" aria-hidden="true"></span></button>' +
     '<button type="button" class="cpb" data-act="hold" aria-pressed="' + !!c.held + '">' + ic('pause') + 'Espera</button>' +
     '<button type="button" class="cpb" data-act="panel" data-v="dtmf">' + ic('keypad') + 'Teclado</button>' +
     '<button type="button" class="cpb" data-act="panel" data-v="transfer">' + ic('transfer') + 'Transferir</button></div></div>' +
@@ -300,10 +389,10 @@ function transferPanel (c) {
     '<div class="two"><button type="button" class="ghostbtn" data-act="panel" data-v="call">Voltar</button><button type="button" class="callbtn" data-act="transfere">' + ic('transfer') + 'Transferir</button></div>'
 }
 function incomingPanel (c) {
-  const d = pessoa(c.r)
+  const d = pessoa(c.r), novo = recente('entra', 500)
   const para = state.contas.length > 1 && c.conta ? ' · para ' + esc(ramalDaConta(c.conta)) : ''
-  return '<div class="cp ringing"><div class="cp-who">' + av(d, 'xl') + '<b>' + esc(d.n) + '</b><small>' + esc(c.r) + para + '</small></div><span class="cp-state">' + ic('pin') + 'Chamada recebida</span></div>' +
-    '<div class="two"><button type="button" class="hangbtn" data-act="decline">' + ic('hang') + 'Recusar</button><button type="button" class="answerbtn" data-act="answer">' + ic('phone') + 'Atender</button></div>'
+  return '<div class="cp ringing' + (novo ? ' fx-entra' : '') + '"><div class="cp-who">' + palco(d, 'chega') + '<b>' + esc(d.n) + '</b><small>' + esc(c.r) + para + '</small></div><span class="cp-state">' + ic('pin') + 'Chamada recebida</span></div>' +
+    '<div class="two' + (novo ? ' fx-entra-bt' : '') + '"><button type="button" class="hangbtn" data-act="decline">' + ic('hang') + 'Recusar</button><button type="button" class="answerbtn brilho" data-act="answer">' + ic('phone') + 'Atender</button></div>'
 }
 // O texto do fim vem do nucleo (Fim::texto): "Ligação transferida" e o da transferencia que se completou,
 // "Atendida em outro ramal" o de quando tocou aqui e em outros aparelhos (grupo, fila) e outro atendeu.
@@ -323,28 +412,56 @@ const histIcone = h => perdida(h) ? ['pmiss', 'var(--crit)'] : emOutroRamal(h) ?
 // apaga tambem as gravacoes delas (mockup aprovado em 27/11).
 // A linha toda, menos o nome e o fim: so a hora, a conta e o ramal pegariam duas ligacoes do mesmo segundo.
 const chaveHist = h => [h.quando, h.conta, h.ramal, h.entrada, h.atendida, h.duracao, h.gravacao || ''].join('|')
+// Perdidas repetidas do mesmo numero viram uma linha so, com o selo de quantas foram (pedido de 28/11): do mesmo
+// tipo (Perdida, Recusada, Nao perturbe), da mesma conta, no mesmo dia e sem outra ligacao desse numero no meio
+// (de nenhuma conta). A linha fica no lugar da mais nova. No modo de selecao, marcadas e desmarcadas nao se
+// juntam: uma perdida nova do mesmo numero vira outra linha, sem entrar escondida no grupo ja marcado.
+const diaInteiro = t => new Date(t * 1000).toDateString()
+function agrupaHist (lista, marcada) {
+  const linhas = [], aberta = new Map()
+  for (const h of lista) {
+    const g = aberta.get(h.ramal)
+    if (g && perdida(h) && h.conta === g.h.conta && histTipo(h) === g.tipo && diaInteiro(h.quando) === g.dia && marcada(h) === marcada(g.h)) { g.itens.push(h); continue }
+    const nova = { h, itens: [h], tipo: histTipo(h), dia: diaInteiro(h.quando) }
+    linhas.push(nova)
+    aberta.set(h.ramal, perdida(h) ? nova : null)
+  }
+  return linhas
+}
+const TIPO_PLURAL = { Perdida: 'Perdidas', Recusada: 'Recusadas' }
+// As linhas da lista (os grupos), na ordem da tela: o modo de selecao marca pelo indice.
+function linhasHist () {
+  const sel = state.sel, marcada = h => !!sel && sel.marcadas.has(chaveHist(h))
+  return agrupaHist([...state.hist].sort((x, y) => y.quando - x.quando), marcada).filter(g => state.hseg === 'all' || perdida(g.h)).slice(0, 200)
+}
+const chavesDas = linhas => [...new Set(linhas.flatMap(g => g.itens.map(chaveHist)))]
 function renderRecent () {
   const el = $('#recent'); if (!el) return
   const sel = state.sel
-  const todas = [...state.hist].sort((x, y) => y.quando - x.quando)
-  const missed = todas.filter(perdida).length
-  const rows = todas.filter(h => state.hseg === 'all' || perdida(h)).slice(0, 200)
+  const missed = state.hist.filter(perdida).length
+  const rows = linhasHist()
+  state.linhas = rows
+  // A selecao fica so no que esta na tela: o que saiu dela (passou das 200 linhas) nao e apagado sem ser visto.
+  if (sel) { const vistas = new Set(chavesDas(rows)); for (const k of [...sel.marcadas]) if (!vistas.has(k)) sel.marcadas.delete(k) }
   // Com alguma gravacao na lista, toda linha reserva o lugar do botao de ouvir: as horas ficam alinhadas.
-  const comOuvir = !sel && rows.some(h => h.gravacao)
+  const comOuvir = !sel && rows.some(g => g.h.gravacao)
   let grupo = '', body = ''
-  for (const h of rows) {
+  rows.forEach((linha, i) => {
+    const h = linha.h, n = linha.itens.length
     const g = dia(h.quando)
     if (g !== grupo) { grupo = g; body += '<div class="rgrp">' + esc(g) + '</div>' }
-    const d = pessoa(h.ramal), [icon, c] = histIcone(h), k = chaveHist(h), marcada = !!sel && sel.marcadas.has(k)
-    const sub = esc(h.ramal) + ' · <span class="k">' + histTipo(h) + '</span>' + (h.duracao ? ' · ' + fmt(h.duracao) : '') + (!h.atendida && !perdida(h) && !emOutroRamal(h) ? ' · ' + esc(h.fim) : '') + (state.contas.length > 1 ? ' · ' + (h.entrada ? 'para ' : 'pelo ') + esc(ramalDaConta(h.conta)) : '') + (h.gravacao ? ' ' + ic('mic', 'ic gr') : '')
+    const d = pessoa(h.ramal), [icon, c] = histIcone(h), marcada = !!sel && linha.itens.every(x => sel.marcadas.has(chaveHist(x)))
+    const tipo = n > 1 ? TIPO_PLURAL[linha.tipo] || linha.tipo : linha.tipo
+    const sub = esc(h.ramal) + ' · <span class="k">' + tipo + '</span>' + (n > 1 ? ' · desde ' + hora(linha.itens[n - 1].quando) : '') + (h.duracao ? ' · ' + fmt(h.duracao) : '') + (!h.atendida && !perdida(h) && !emOutroRamal(h) ? ' · ' + esc(h.fim) : '') + (h.fim === 'Em outra ligação' ? ' · em outra ligação' : '') + (state.contas.length > 1 ? ' · ' + (h.entrada ? 'para ' : 'pelo ') + esc(ramalDaConta(h.conta)) : '') + (h.gravacao ? ' ' + ic('mic', 'ic gr') : '')
+    const selo = n > 1 ? '<span class="selo" title="' + plural(n, 'ligação', 'ligações') + '">' + (n > 99 ? '99+' : n) + '</span>' : ''
     const marca = sel ? '<span class="ckbox' + (marcada ? ' on' : '') + '" aria-hidden="true">' + ic('check') + '</span>' : '<span class="dir" style="--c:' + c + '">' + ic(icon) + '</span>'
-    const acao = sel ? ' data-act="marca" data-v="' + esc(k) + '" role="checkbox" aria-checked="' + marcada + '"' : ' data-act="fill" data-v="' + esc(h.ramal) + '" title="Pôr ' + esc(h.ramal) + ' no campo"'
+    const acao = sel ? ' data-act="marca" data-v="' + i + '" role="checkbox" aria-checked="' + marcada + '"' : ' data-act="fill" data-v="' + esc(h.ramal) + '" title="Pôr ' + esc(h.ramal) + ' no campo"'
     body += '<div class="hrow' + (marcada ? ' marcada' : '') + '"><button type="button" class="hmain' + (perdida(h) ? ' missed' : emOutroRamal(h) ? ' outro' : '') + '"' + acao + '>' +
-      marca + '<span class="tx"><b>' + esc(d.n) + '</b><small>' + sub + '</small></span><span class="when">' + hora(h.quando) + '</span></button>' +
+      marca + '<span class="tx"><span class="nm"><b>' + esc(d.n) + '</b>' + selo + '</span><small>' + sub + '</small></span><span class="when">' + hora(h.quando) + '</span></button>' +
       (sel ? '' : (h.gravacao ? '<button type="button" class="iconbtn sm" data-act="ouvir-gravacao" data-v="' + esc(h.gravacao) + '" aria-label="Ouvir a gravação com ' + esc(d.n) + '" title="Ouvir a gravação">' + ic('play') + '</button>' : comOuvir ? '<span class="iconbtn sm oco" aria-hidden="true"></span>' : '') +
         '<button type="button" class="iconbtn sm go" data-act="call" data-v="' + esc(h.ramal) + '" aria-label="Ligar para ' + esc(d.n) + '" title="Ligar">' + ic('phone') + '</button>' +
         '<button type="button" class="iconbtn sm" data-act="msg" data-v="' + esc(h.ramal) + '" aria-label="Mensagem para ' + esc(d.n) + '" title="Mensagem">' + ic('chat') + '</button>') + '</div>'
-  }
+  })
   const vazio = state.hseg === 'all'
     ? '<div class="empty"><b>Nenhuma ligação ainda</b><span>As ligações feitas e recebidas neste computador aparecem aqui.</span></div>'
     : '<div class="empty"><b>Nenhuma perdida</b><span>Quando alguém ligar e você não atender, aparece aqui.</span></div>'
@@ -352,7 +469,7 @@ function renderRecent () {
   const n = marcadas.length
   const cabeca = sel
     ? '<header class="rhead"><h2>' + (n ? plural(n, 'selecionada', 'selecionadas') : 'Toque nas ligações') + '</h2><div class="selacts">' +
-      '<button type="button" class="btn sm" data-act="marca-todas">' + (n && n === rows.length ? 'Desmarcar' : 'Marcar todas') + '</button>' +
+      '<button type="button" class="btn sm" data-act="marca-todas">' + (n && chavesDas(rows).every(k => sel.marcadas.has(k)) ? 'Desmarcar' : 'Marcar todas') + '</button>' +
       '<button type="button" class="btn sm perigo" data-act="exclui-hist"' + (n ? '' : ' disabled') + '>' + ic('trash') + 'Excluir</button>' +
       '<button type="button" class="btn sm" data-act="sel-sai">Cancelar</button></div></header>'
     : '<header class="rhead"><h2>Últimas chamadas</h2><div class="rtools"><div class="mseg" role="group" aria-label="Filtro">' +
@@ -712,7 +829,7 @@ async function startCall (r) {
   if (!r) return toast('Digite um ramal ou número.')
   if (state.call) return toast('Já tem uma ligação. Desligue antes de ligar de novo.')
   if (!state.contas.length) return toast('Cadastre uma conta antes de ligar.')
-  closePop()
+  closePop(); acabaFim(); marcaFx('liga')
   state.call = { id: null, kind: 'outgoing', r, tocando: false }
   state.panel = 'call'; state.dial = ''
   if (state.view === 'chamadas') renderLeft(); renderStrip()
@@ -776,7 +893,7 @@ const SONS = {
 function aplica (e) {
   state.contas = e.contas; state.prefs = e.preferencias; state.erroPrefs = e.erroPreferencias; state.temChaveiro = e.temChaveiro; state.pasta = e.pasta
   state.hist = e.historico; state.convs = e.conversas; state.toques = e.toques || []
-  state.apelidos = e.apelidos || {}; state.presencas = e.presencas || {}
+  state.apelidos = e.apelidos || {}; state.presencas = e.presencas || {}; state.missedNew = e.perdidas || 0
   if (e.chamada && !state.call) {
     const c = e.chamada
     state.call = { id: c.id, kind: c.atendida ? 'active' : c.entrada ? 'incoming' : 'outgoing', r: c.ramal, t0: c.desde * 1000, gravando: c.gravando }
@@ -790,6 +907,10 @@ function recebe (a) {
       if (state.view === 'ramais' && !state.editaNome) renderDlist()
       break
     case 'abre-conversa': state.open = a.ramal; go('conversas'); { const t = $('#msg-in'); if (t) t.focus() } break
+    // As perdidas que ninguem viu (o ponto da bandeja): o telefone conta e zera quando Chamadas aparece em foco.
+    case 'perdidas': state.missedNew = a.n; renderChrome(); break
+    case 'abre-chamadas': go('chamadas'); break
+    case 'liga': go('chamadas'); startCall(a.ramal); break
     case 'pbx': {
       const c = state.contas.find(x => x.id === a.conta); if (!c) break
       const mudou = c.semResposta !== a.semResposta || (c.pbxMs == null) !== (a.pbxMs == null)
@@ -806,6 +927,7 @@ function recebe (a) {
       break
     case 'recebendo':
       if (a.nome) state.nomes[a.ramal] = a.nome
+      acabaFim(); marcaFx('entra')
       { const ouvindo = $('#ouvindo audio'); if (ouvindo) ouvindo.pause() }
       state.call = { id: a.id, kind: 'incoming', r: a.ramal, conta: a.conta }
       state.panel = 'call' // o toque, o telefone toca (no alto-falante escolhido ou em todos)
@@ -816,7 +938,7 @@ function recebe (a) {
       break
     case 'atendida':
       if (daChamada(a.id) || (state.call && !state.call.id && state.call.kind === 'outgoing')) {
-        paraSom()
+        paraSom(); marcaFx('conectou')
         Object.assign(state.call, { id: a.id, kind: 'active', t0: Date.now(), codec: a.codec, gravando: a.gravando })
         if (state.view === 'chamadas') renderLeft(); renderStrip()
       }
@@ -825,6 +947,7 @@ function recebe (a) {
       if (daChamada(a.id)) { state.call.deles = a.sim; if (state.view === 'chamadas') renderLeft(); renderStrip() }
       break
     case 'nivel': mostraNivel(a); break
+    case 'voz': mostraVoz(a); break
     case 'microfone':
       if (daChamada(a.id)) {
         state.call.semSom = a.silencio
@@ -845,11 +968,12 @@ function recebe (a) {
     case 'erro': toast(a.texto); break
     case 'encerrada': {
       state.hist.push(a.item)
-      if (daChamada(a.id)) { const era = state.call.kind; paraSom(); state.call = null; if (era !== 'incoming') SONS.fim() }
+      if (daChamada(a.id)) { const era = state.call.kind; comecaFim(state.call, a.item); paraSom(); state.call = null; if (era !== 'incoming') SONS.fim() }
       const d = pessoa(a.item.ramal)
-      if (perdida(a.item) && state.view !== 'chamadas') state.missedNew++
-      toast(peloNaoPerturbe(a.item) ? 'Ligação de ' + d.n + ' recusada: não perturbe.' : perdida(a.item) ? 'Ligação perdida de ' + d.n + '.' : emOutroRamal(a.item) ? 'Ligação de ' + d.n + ' atendida em outro ramal.' : transferida(a.item) ? 'Ligação transferida · ' + fmt(a.item.duracao) : a.item.atendida ? 'Ligação encerrada · ' + fmt(a.item.duracao) : a.item.fim)
+      // Na aba Chamadas, o fim no lugar do teclado ja diz o que houve; o aviso de baixo fica para as outras abas.
+      if (state.view !== 'chamadas') toast(peloNaoPerturbe(a.item) ? 'Ligação de ' + d.n + ' recusada: não perturbe.' : perdida(a.item) ? 'Ligação perdida de ' + d.n + '.' : emOutroRamal(a.item) ? 'Ligação de ' + d.n + ' atendida em outro ramal.' : transferida(a.item) ? 'Ligação transferida · ' + fmt(a.item.duracao) : a.item.atendida ? 'Ligação encerrada · ' + fmt(a.item.duracao) : a.item.fim)
       refresh()
+      acendeNova(a.item)
       break
     }
     case 'mensagem': {
@@ -1022,6 +1146,8 @@ document.addEventListener('click', async e => {
     case 'form-cancela': state.form = null; renderView(); break
     case 'remove-conta': if (oculta()) break; state.form = null; state.remover = v; renderView(); break
     case 'remove-cancela': state.remover = null; renderView(); break
+    case 'fim-fecha': acabaFim(); break
+    case 'fim-religa': acabaFim(); startCall(v); break
     case 'tira-do-mudo':
       if (await acao('tira_do_mudo', {}, 'Não tirei do mudo')) { toast('Microfone fora do mudo. Fale alguma coisa.'); if (state.call) { state.call.micMudo = false; if (state.view === 'chamadas') renderLeft() } if (state.testeMic) { state.testeMic.mudo = false; mostraNivel(null) } }
       break
@@ -1079,11 +1205,16 @@ document.addEventListener('click', async e => {
     case 'ouvir-gravacao': await ouveGravacao(v); break
     case 'sel-entra': state.sel = { marcadas: new Set(), confirma: false, gravacoes: true }; renderRecent(); break
     case 'sel-sai': state.sel = null; renderRecent(); break
-    case 'marca': if (state.sel) { const m = state.sel.marcadas; if (m.has(v)) m.delete(v); else m.add(v); state.sel.confirma = false; renderRecent() } break
+    case 'marca': {
+      const s = state.sel, linha = state.linhas[Number(v)]; if (!s || !linha) break
+      const ks = linha.itens.map(chaveHist), todas = ks.every(k => s.marcadas.has(k))
+      ks.forEach(k => todas ? s.marcadas.delete(k) : s.marcadas.add(k))
+      s.confirma = false; renderRecent(); break
+    }
     case 'marca-todas': {
       const s = state.sel; if (!s) break
-      const visiveis = [...state.hist].sort((x, y) => y.quando - x.quando).filter(h => state.hseg === 'all' || perdida(h)).slice(0, 200).map(chaveHist)
-      if (s.marcadas.size === visiveis.length) s.marcadas.clear(); else visiveis.forEach(k => s.marcadas.add(k))
+      const visiveis = chavesDas(state.linhas)
+      if (visiveis.every(k => s.marcadas.has(k))) visiveis.forEach(k => s.marcadas.delete(k)); else visiveis.forEach(k => s.marcadas.add(k))
       s.confirma = false; renderRecent(); break
     }
     case 'exclui-hist': if (state.sel && state.sel.marcadas.size) { state.sel.confirma = true; renderRecent() } break
@@ -1200,6 +1331,8 @@ document.addEventListener('keydown', e => {
   // Com o teclado aberto na ligacao, digitar manda o tom
   if (state.call && state.call.kind === 'active' && state.panel === 'dtmf' && DIALABLE.test(e.key)) { e.preventDefault(); SONS.tecla(e.key); mandaTom(e.key); return }
   if (state.call) return
+  // O fim da ligacao no lugar do teclado: Esc fecha, e digitar ja volta para o teclado.
+  if (state.fim && (e.key === 'Escape' || (e.key.length === 1 && e.key !== ' '))) { acabaFim(); if (e.key === 'Escape') return }
   if (t.closest && t.closest('input, textarea, .pop')) return
   // Na aba Chamadas, digitar com o foco fora do campo cai no campo
   if (e.key.length === 1 && e.key !== ' ' && $('#dial-main')) {
@@ -1222,6 +1355,23 @@ setInterval(() => {
   if (a) a.textContent = s
   if (b) b.textContent = s
 }, 1000)
+
+// As perdidas foram vistas quando alguem mexe na tela em Chamadas (clique, tecla, roda, o mouse andando). O foco
+// sozinho nao vale: o toque traz a janela para a frente mesmo sem ninguem na mesa. O clique espera o app trocar de
+// aba (clicar em Chamadas no menu ja conta).
+let avisandoVistas = false
+function viuPerdidas () {
+  if (!state.missedNew || avisandoVistas || state.view !== 'chamadas' || !document.hasFocus()) return
+  avisandoVistas = true
+  invoke('viu_perdidas').catch(() => {}).finally(() => { avisandoVistas = false })
+}
+for (const ev of ['click', 'keydown', 'wheel']) document.addEventListener(ev, () => setTimeout(viuPerdidas), { capture: true, passive: true })
+let ultimoPonteiro = null
+document.addEventListener('pointermove', e => {
+  const p = [e.screenX, e.screenY]
+  if (ultimoPonteiro && Math.hypot(p[0] - ultimoPonteiro[0], p[1] - ultimoPonteiro[1]) > 8) viuPerdidas()
+  ultimoPonteiro = p
+}, { passive: true })
 
 async function abre () {
   await listen('telefone', ev => recebe(ev.payload))

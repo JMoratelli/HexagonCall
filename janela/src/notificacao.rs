@@ -4,47 +4,92 @@
 //! some quando a ligacao e atendida pela janela ou acaba. O som e o toque do
 //! app, nao o da notificacao.
 //!
+//! A perdida tambem vai para a notificacao (pedido de 28/11), com "Ligar de
+//! volta": uma por numero, que conta as repetidas no lugar de empilhar.
+//!
 //! No Windows o toast sai com o nome e o icone do app (nao "Windows
 //! PowerShell"): o app registra o proprio AppUserModelID no HKCU, como o
 //! instalador faz no atalho do Menu Iniciar (ver `windows::registra`).
 
 use crate::guarda::Flavor;
 use crate::telefone::Telefone;
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, PoisonError};
 use tauri::{AppHandle, Manager};
 use tracing::warn;
 
 /// A notificacao de cada ligacao chegando, pela plataforma.
-pub struct Notificacoes(sistema::Sistema);
+pub struct Notificacoes {
+    sistema: sistema::Sistema,
+    /// Ramal -> quantas perdidas dele ainda nao vistas.
+    perdidas: Mutex<HashMap<String, u32>>,
+}
 
 impl Notificacoes {
     pub fn nova(flavor: Flavor) -> Self {
-        Self(sistema::Sistema::novo(flavor))
+        Self {
+            sistema: sistema::Sistema::novo(flavor),
+            perdidas: Mutex::default(),
+        }
     }
 
     pub fn chegando(&self, app: &AppHandle, id: &str, quem: &str, ramal: &str) {
-        self.0.chegando(app, id, quem, ramal);
+        self.sistema.chegando(app, id, quem, ramal);
+    }
+
+    /// Uma ligacao perdida: o aviso daquele numero, com "Ligar de volta",
+    /// toma o lugar do anterior e diz quantas foram.
+    pub fn perdida(&self, app: &AppHandle, ramal: &str, nome: Option<&str>) {
+        let n = {
+            let mut p = self.perdidas.lock().unwrap_or_else(PoisonError::into_inner);
+            let n = p.entry(ramal.to_string()).or_insert(0);
+            *n = n.saturating_add(1);
+            *n
+        };
+        let titulo = if n == 1 {
+            "Ligação perdida".to_string()
+        } else {
+            format!("{n} ligações perdidas")
+        };
+        self.sistema
+            .perdida(app, ramal, &titulo, &quem(ramal, nome));
+    }
+
+    /// As perdidas foram vistas na tela: os avisos delas saem.
+    pub fn fecha_perdidas(&self) {
+        self.perdidas
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clear();
+        self.sistema.fecha_perdidas();
     }
 
     /// Uma mensagem chegou com a janela escondida ou atras de outra: quem
     /// mandou e o texto, com "Responder" (abre a conversa).
     pub fn mensagem(&self, app: &AppHandle, ramal: &str, nome: Option<&str>, texto: &str) {
-        let quem = match nome {
-            Some(n) => format!("{n} · {ramal}"),
-            None => format!("Ramal {ramal}"),
-        };
         let corpo: String = texto.chars().take(200).collect();
-        self.0.mensagem(app, ramal, &quem, &corpo);
+        self.sistema
+            .mensagem(app, ramal, &quem(ramal, nome), &corpo);
     }
 
     /// A ligacao foi atendida pela janela ou acabou: a notificacao sai.
     pub fn fecha(&self, id: &str) {
-        self.0.fecha(id);
+        self.sistema.fecha(id);
     }
 
-    /// O app vai sair: nenhuma notificacao de ligacao fica para tras.
+    /// O app vai sair: nenhuma notificacao de ligacao fica para tras (nem a
+    /// de perdida, cujo "Ligar de volta" nao teria mais quem atender).
     pub fn fecha_todas(&self) {
-        self.0.fecha_todas();
+        self.sistema.fecha_todas();
+        self.fecha_perdidas();
+    }
+}
+
+/// "Financeiro · 1003", ou "Ramal 1003" sem nome.
+fn quem(ramal: &str, nome: Option<&str>) -> String {
+    match nome {
+        Some(n) => format!("{n} · {ramal}"),
+        None => format!("Ramal {ramal}"),
     }
 }
 
@@ -76,6 +121,25 @@ fn responde(app: &AppHandle, id: &str, acao: &str) {
     }
 }
 
+/// O clique no aviso da perdida: "Ligar de volta" liga pela tela (como o
+/// botao dela); o corpo abre a janela em Chamadas.
+fn responde_perdida(app: &AppHandle, ramal: &str, acao: &str) {
+    let Some(t) = app.try_state::<Arc<Telefone>>() else {
+        return;
+    };
+    match acao {
+        "ligar" => {
+            crate::mostra(app);
+            t.liga_de_volta(ramal);
+        }
+        "default" | "abrir" => {
+            crate::mostra(app);
+            t.abre_chamadas();
+        }
+        _ => {}
+    }
+}
+
 /// O clique no aviso da mensagem: abre a janela na conversa.
 #[cfg_attr(windows, allow(dead_code))]
 fn responde_mensagem(app: &AppHandle, ramal: &str, acao: &str) {
@@ -90,7 +154,7 @@ fn responde_mensagem(app: &AppHandle, ramal: &str, acao: &str) {
 
 #[cfg(not(windows))]
 mod sistema {
-    use super::{responde, responde_mensagem};
+    use super::{responde, responde_mensagem, responde_perdida};
     use crate::guarda::Flavor;
     #[cfg(all(unix, not(target_os = "macos")))]
     use notify_rust::Hint;
@@ -105,6 +169,8 @@ mod sistema {
     pub struct Sistema {
         titulo: &'static str,
         abertas: Arc<Mutex<HashMap<String, u32>>>,
+        /// O aviso de perdida de cada numero (ramal -> id no sistema).
+        perdidas: Arc<Mutex<HashMap<String, u32>>>,
     }
 
     impl Sistema {
@@ -112,6 +178,62 @@ mod sistema {
             Self {
                 titulo: crate::titulo(flavor),
                 abertas: Arc::default(),
+                perdidas: Arc::default(),
+            }
+        }
+
+        /// O aviso anterior do mesmo numero fecha antes (a thread dele, que
+        /// espera o clique, termina junto) e o novo entra com a conta. Fechar o
+        /// anterior, mostrar e guardar o id vao sob a mesma trava: duas perdidas
+        /// seguidas nao deixam dois avisos.
+        pub fn perdida(&self, app: &AppHandle, ramal: &str, titulo: &str, quem: &str) {
+            let mut n = Notification::new();
+            n.appname(self.titulo)
+                .summary(titulo)
+                .body(quem)
+                .icon("call-missed")
+                .action("default", "Abrir")
+                .action("ligar", "Ligar de volta")
+                .urgency(Urgency::Normal);
+            #[cfg(all(unix, not(target_os = "macos")))]
+            n.hint(Hint::Category("call.unanswered".into()))
+                .hint(Hint::SuppressSound(true));
+            let app = app.clone();
+            let ramal = ramal.to_string();
+            let perdidas = Arc::clone(&self.perdidas);
+            std::thread::spawn(move || {
+                let handle = {
+                    let mut abertas = perdidas.lock().unwrap_or_else(PoisonError::into_inner);
+                    if let Some(anterior) = abertas.remove(&ramal) {
+                        fecha_no_sistema(anterior);
+                    }
+                    let handle = match n.show() {
+                        Ok(h) => h,
+                        Err(e) => {
+                            debug!("notificacao da perdida: {e}");
+                            return;
+                        }
+                    };
+                    #[cfg(target_os = "linux")]
+                    abertas.insert(ramal.clone(), handle.id());
+                    #[cfg(not(target_os = "linux"))]
+                    let _ = &mut abertas;
+                    handle
+                };
+                handle.wait_for_action(|acao| responde_perdida(&app, &ramal, acao));
+            });
+        }
+
+        pub fn fecha_perdidas(&self) {
+            let abertas: Vec<u32> = self
+                .perdidas
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .drain()
+                .map(|(_, n)| n)
+                .collect();
+            for n in abertas {
+                fecha_no_sistema(n);
             }
         }
 
@@ -225,7 +347,7 @@ mod sistema {
 
 #[cfg(windows)]
 mod sistema {
-    use super::responde;
+    use super::{responde, responde_perdida};
     use crate::guarda::Flavor;
     use std::collections::HashMap;
     use std::path::{Path, PathBuf};
@@ -247,6 +369,9 @@ mod sistema {
     /// Todas as notificacoes de ligacao ficam num grupo: o tag sozinho nao
     /// identifica o toast para tirar da tela.
     const GRUPO: &str = "ligacao";
+    /// As perdidas, noutro grupo: o tag e o numero, e o toast novo do mesmo
+    /// numero toma o lugar do anterior na central.
+    const GRUPO_PERDIDAS: &str = "perdida";
 
     pub struct Sistema {
         aumid: String,
@@ -256,6 +381,8 @@ mod sistema {
         /// Id da ligacao -> (tag, toast). O objeto fica guardado para o
         /// clique continuar chegando enquanto a ligacao toca.
         abertas: Mutex<HashMap<String, (String, ToastNotification)>>,
+        /// Ramal -> (tag, toast) das perdidas, guardados pelo mesmo motivo.
+        perdidas: Mutex<HashMap<String, (String, ToastNotification)>>,
         proximo: AtomicU64,
     }
 
@@ -279,7 +406,79 @@ mod sistema {
                 aumid,
                 icone,
                 abertas: Mutex::new(HashMap::new()),
+                perdidas: Mutex::new(HashMap::new()),
                 proximo: AtomicU64::new(1),
+            }
+        }
+
+        pub fn perdida(&self, app: &AppHandle, ramal: &str, titulo: &str, quem: &str) {
+            // O tag tem limite de 16 no Windows 10 antigo: o fim do numero.
+            let fim: String = ramal
+                .chars()
+                .rev()
+                .take(15)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect();
+            let tag = format!("p{fim}");
+            match self.mostra_perdida(app, ramal, &tag, titulo, quem) {
+                Ok(toast) => {
+                    self.perdidas
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .insert(ramal.to_string(), (tag, toast));
+                }
+                Err(e) => warn!("notificacao da perdida: {e}"),
+            }
+        }
+
+        fn mostra_perdida(
+            &self,
+            app: &AppHandle,
+            ramal: &str,
+            tag: &str,
+            titulo: &str,
+            quem: &str,
+        ) -> windows::core::Result<ToastNotification> {
+            let doc = XmlDocument::new()?;
+            doc.LoadXml(&HSTRING::from(xml_da_perdida(
+                titulo,
+                quem,
+                self.icone.as_deref(),
+            )))?;
+            let toast = ToastNotification::CreateToastNotification(&doc)?;
+            toast.SetTag(&HSTRING::from(tag))?;
+            toast.SetGroup(&HSTRING::from(GRUPO_PERDIDAS))?;
+            let app = app.clone();
+            let ramal = ramal.to_string();
+            toast.Activated(&TypedEventHandler::<ToastNotification, IInspectable>::new(
+                move |_, args| {
+                    let acao = args
+                        .as_ref()
+                        .and_then(|a| a.cast::<ToastActivatedEventArgs>().ok())
+                        .and_then(|a| a.Arguments().ok())
+                        .map(|h| h.to_string())
+                        .unwrap_or_default();
+                    responde_perdida(&app, &ramal, if acao.is_empty() { "abrir" } else { &acao });
+                    Ok(())
+                },
+            ))?;
+            ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from(&self.aumid))?
+                .Show(&toast)?;
+            Ok(toast)
+        }
+
+        pub fn fecha_perdidas(&self) {
+            let abertas: Vec<(String, ToastNotification)> = self
+                .perdidas
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .drain()
+                .map(|(_, t)| t)
+                .collect();
+            for (tag, toast) in &abertas {
+                self.tira(tag, GRUPO_PERDIDAS, toast);
             }
         }
 
@@ -346,7 +545,7 @@ mod sistema {
                 .unwrap_or_else(PoisonError::into_inner)
                 .remove(id);
             if let Some((tag, toast)) = aberta {
-                self.tira(&tag, &toast);
+                self.tira(&tag, GRUPO, &toast);
             }
         }
 
@@ -359,14 +558,14 @@ mod sistema {
                 .map(|(_, t)| t)
                 .collect();
             for (tag, toast) in &abertas {
-                self.tira(tag, toast);
+                self.tira(tag, GRUPO, toast);
             }
         }
 
         /// Tira da tela (Hide) e da central de notificacoes (History): o
         /// cenario de ligacao fica na tela ate alguem agir, entao nao some
         /// sozinho quando a ligacao acaba.
-        fn tira(&self, tag: &str, toast: &ToastNotification) {
+        fn tira(&self, tag: &str, grupo: &str, toast: &ToastNotification) {
             let aumid = HSTRING::from(&self.aumid);
             if let Err(e) = ToastNotificationManager::CreateToastNotifierWithId(&aumid)
                 .and_then(|n| n.Hide(toast))
@@ -374,7 +573,7 @@ mod sistema {
                 debug!("esconder a notificacao: {e}");
             }
             if let Err(e) = ToastNotificationManager::History().and_then(|h| {
-                h.RemoveGroupedTagWithId(&HSTRING::from(tag), &HSTRING::from(GRUPO), &aumid)
+                h.RemoveGroupedTagWithId(&HSTRING::from(tag), &HSTRING::from(grupo), &aumid)
             }) {
                 debug!("tirar a notificacao da central: {e}");
             }
@@ -394,6 +593,22 @@ mod sistema {
             r#"<toast scenario="incomingCall" launch="abrir"><visual><binding template="ToastGeneric"><text>Ligação de {}</text><text>{} · chamando você</text>{imagem}</binding></visual><actions><action content="Recusar" arguments="recusar"/><action content="Atender" arguments="atender"/></actions><audio silent="true"/></toast>"#,
             escapa(quem),
             escapa(ramal)
+        )
+    }
+
+    /// O toast da perdida: o comum (some sozinho e fica na central), sem som (a
+    /// ligacao ja tocou), com "Ligar de volta" e o corpo abrindo a janela.
+    pub(super) fn xml_da_perdida(titulo: &str, quem: &str, icone: Option<&Path>) -> String {
+        let imagem = icone.map_or(String::new(), |p| {
+            format!(
+                r#"<image placement="appLogoOverride" hint-crop="circle" src="{}"/>"#,
+                escapa(&uri_de_arquivo(p))
+            )
+        });
+        format!(
+            r#"<toast launch="abrir"><visual><binding template="ToastGeneric"><text>{}</text><text>{}</text>{imagem}</binding></visual><actions><action content="Ligar de volta" arguments="ligar"/></actions><audio silent="true"/></toast>"#,
+            escapa(titulo),
+            escapa(quem)
         )
     }
 
@@ -436,6 +651,15 @@ mod sistema {
         fn nome_com_xml_nao_quebra_o_toast() {
             let x = xml_da_ligacao("<Loja & Cia>", "1001", None);
             assert!(x.contains("Ligação de &lt;Loja &amp; Cia&gt;"));
+            let doc = XmlDocument::new().unwrap();
+            doc.LoadXml(&HSTRING::from(x)).unwrap();
+        }
+
+        #[test]
+        fn a_perdida_vira_toast_com_ligar_de_volta() {
+            let x = xml_da_perdida("2 ligações perdidas", "<Loja & Cia> · 1003", None);
+            assert!(x.contains("&lt;Loja &amp; Cia&gt; · 1003"));
+            assert!(x.contains(r#"arguments="ligar""#));
             let doc = XmlDocument::new().unwrap();
             doc.LoadXml(&HSTRING::from(x)).unwrap();
         }

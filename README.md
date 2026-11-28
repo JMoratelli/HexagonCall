@@ -43,6 +43,9 @@ O núcleo foi testado contra um PBX de verdade (Asterisk 13 com chan_sip), e a j
 | Tons do teclado na ligação (DTMF, RFC 4733) e transferência (REFER) | nos testes locais |
 | Toques de entrada (cinco discretos e três fortes, para sala com barulho), tocar em todos os alto-falantes no volume máximo, abrir com o sistema | na janela |
 | Instalação em massa: `ocultaConfig = 1` tira da tela as contas e quase todas as opções, que vêm dos arquivos | na janela |
+| Perdidas à vista: o ponto vermelho no ícone da bandeja (com quantas na dica), o número na barra de tarefas e o aviso com "Ligar de volta", um por número; zeram quando alguém mexe na tela em Chamadas. No histórico, as perdidas repetidas do mesmo número viram uma linha com o selo de quantas foram | na janela, com um PBX falso; o aviso e o sobreposto do Windows ainda não vistos no Windows |
+| Fila, grupo de ramais e siga-me sem "Offline": o PBX manda para a fila o mesmo "Not online" do aparelho desligado, então o número que tocou com a presença Offline deixa de mostrar Offline (`sem-presenca.txt`) | nos testes locais |
+| Efeitos de chamada no padrão da colmeia: o favo em volta de quem liga, as ondas enquanto toca, o favo respirando com a voz do outro lado (e a sua no botão Mudo), o fim e a ligação que caiu | na janela |
 | Status no alto da janela: Disponível ou Não perturbe (recusa como ocupado, 486; fica no histórico), a conexão de cada conta e o Reconectar | na janela, com um PBX falso |
 | Instalador do Windows e atualização sozinha (releases do GitHub, conferida por sha256) | testado no Windows 10 |
 | AppImage do Linux e atualização sozinha (a mesma release, conferida por sha256), atalho no menu | testada no CachyOS (AppImage do Ubuntu 22.04) |
@@ -105,12 +108,15 @@ Na pasta do usuário (`~/.config/hexagon-call`; no Windows, `%APPDATA%\hexagon-c
   some;
 - `senhas.toml`: a senha de cada conta, em `[senhas]`, como `"1001@pbx.exemplo.com.br" = "..."`, legível só pelo
   usuário. O app procura a senha no chaveiro e, se não achar, neste arquivo;
+- `sem-presenca.txt` (opcional): os números de fila ou de grupo de ramais, um por linha, para não aparecerem como
+  "Offline" em Ramais. O app acrescenta sozinho o número que tocou com a presença Offline; a fila em que o próprio
+  ramal está responde 480 para ele e nunca toca, e essa vale escrever à mão;
 - `preferencias.toml`: `ocultaConfig = 1` e o que mais quiser, como `toque = "alerta"`, `toqueNoMaximo = 1` ou
   `gravar = 1` (as opções de ligar e desligar aceitam `0`/`1` e `false`/`true`). Com `ocultaConfig`,
   `abrirComOSistema = 1` liga o abrir com o sistema a cada vez que o app abre, e `0` desliga. `permitirNaoPerturbe = 0`
   tira o "Não perturbe" do botão de status (vale com ou sem `ocultaConfig`).
 
-Os três podem ser gravados em UTF-8 ou em UTF-16 (o `Out-File` do PowerShell). Ao abrir, o app acrescenta no fim do
+Todos podem ser gravados em UTF-8 ou em UTF-16 (o `Out-File` do PowerShell). Ao abrir, o app acrescenta no fim do
 `preferencias.toml` as chaves que faltam, no valor padrão (`ocultaConfig = 0`), para mostrar o que dá para mudar; só
 `microfone`, `altoFalante` e `abrirComOSistema` ficam de fora quando não têm valor. O que já estava escrito fica como
 estava, mas mudar o microfone ou o tema pela tela regrava o arquivo sem os comentários. Na trava, só `0` ou `false`

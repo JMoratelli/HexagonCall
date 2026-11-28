@@ -14,7 +14,7 @@ use std::path::Path;
 use tracing::{info, warn};
 
 /// O identificador do app (tauri.conf.json): o nome do atalho e do icone.
-const ID: &str = "org.jj.HexagonCall";
+pub const ID: &str = "org.jj.HexagonCall";
 
 /// Cria ou acerta o atalho. Fora de uma AppImage, nada (o app de
 /// desenvolvimento nao entra no menu).

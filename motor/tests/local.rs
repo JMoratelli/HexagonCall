@@ -148,6 +148,16 @@ async fn liga_atende_fala_e_desliga() {
     espera(&mut rb, |e| matches!(e, Evento::Atendida { .. })).await;
 
     tokio::time::sleep(Duration::from_millis(1500)).await;
+    // O nivel de cada lado: o tom a 0,3 da escala, o nosso e o que chegou; ler
+    // zera ate o proximo quadro.
+    let (nosso, deles) = a.niveis(&id).unwrap();
+    assert!((9000..10500).contains(&nosso), "nosso {nosso}");
+    assert!((8000..11000).contains(&deles), "deles {deles}");
+    a.mudo(&id, true).unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let _ = a.niveis(&id).unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(a.niveis(&id).unwrap().0, 0, "no mudo, nada sai");
     a.desliga(&id).await.unwrap();
 
     let fim_a = espera(&mut ra, |e| matches!(e, Evento::Encerrada { .. })).await;

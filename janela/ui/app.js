@@ -266,7 +266,7 @@ let fimT = null
 function comecaFim (c, it) {
   const tipo = c.kind === 'incoming' ? 'perdida' : it.atendida && /^A ligação falhou/.test(it.fim) ? 'caiu' : 'normal'
   clearTimeout(fimT)
-  state.fim = { tipo, item: it, r: c.r, conta: c.conta, desde: Date.now(), ate: Date.now() + DURA_FIM[tipo] }
+  state.fim = { tipo, item: it, r: c.r, conta: c.conta, qualidade: c.qualidade, desde: Date.now(), ate: Date.now() + DURA_FIM[tipo] }
   if (DURA_FIM[tipo]) fimT = setTimeout(acabaFim, DURA_FIM[tipo])
 }
 function acabaFim () {
@@ -282,7 +282,7 @@ function fimPanel (f) {
   }
   if (f.tipo === 'caiu') {
     return '<div class="cp"><div class="cp-who">' + palco(d, 'caiu') + '<b>' + esc(d.n) + '</b><small>' + esc(f.r) + '</small></div>' +
-      '<div class="fim-tx caiu" role="alert"><b>' + ic('alert') + 'A ligação caiu</b><span>Aos ' + fmt(it.duracao) + ' de ligação.</span></div></div>' +
+      '<div class="fim-tx caiu" role="alert"><b>' + ic('alert') + 'A ligação caiu</b><span>Aos ' + fmt(it.duracao) + ' de ligação' + (f.qualidade && f.qualidade.culpa === 'aqui' ? ', com a sua conexão com o PBX instável' : '') + '.</span></div></div>' +
       '<div class="two"><button type="button" class="ghostbtn" data-act="fim-fecha">Fechar</button><button type="button" class="callbtn" data-act="fim-religa" data-v="' + esc(f.r) + '">' + ic('phone') + 'Ligar de novo</button></div>'
   }
   const quem = it.fim === 'O outro lado desligou' ? esc(primeiro(d)) + ' desligou' : esc(it.fim)
@@ -291,6 +291,31 @@ function fimPanel (f) {
     '<div class="fim-tx" role="status"><b>' + (it.atendida ? 'Ligação encerrada' : 'Não completou') + '</b><span>' + quem + '</span></div>' +
     '<div class="fim-barra" style="--t:' + (f.ate - f.desde) + 'ms"></div></div>'
 }
+// A qualidade da ligacao (de 2 em 2 s, do telefone): tres barras no lugar do icone de sinal e, quando esta ruim, o
+// aviso de quem e o problema. "aqui": a sonda do PBX falhou ou demorou (a conexao daqui); "la": a sonda esta boa e o
+// audio chega picotado (o outro lado).
+const NIVEL_QUALIDADE = { 3: 'boa', 2: 'fraca', 1: 'ruim' }
+function barras (q) {
+  const dica = q ? 'Qualidade ' + NIVEL_QUALIDADE[q.nivel] + ' · perda ' + q.perda + '% · variação ' + q.variacaoMs + ' ms · PBX ' + (q.pbxMs == null ? 'sem resposta' : q.pbxMs + ' ms') : 'Medindo a qualidade'
+  return '<span class="barras' + (q ? ' n' + q.nivel : '') + '" id="cp-barras" role="img" aria-label="' + esc(dica) + '" title="' + esc(dica) + '"><i></i><i></i><i></i></span>'
+}
+function alertaQualidade (q) {
+  if (!q || q.nivel === 3 || !q.culpa) return ''
+  const [titulo, texto] = q.culpa === 'aqui'
+    ? ['Sua conexão com o PBX está instável', (q.pbxMs == null ? 'O PBX deixou de responder em alguns momentos.' : 'O PBX está levando ' + q.pbxMs + ' ms para responder.') + ' Wi-Fi fraco ou rede ocupada aqui.']
+    : ['O áudio está chegando picotado', 'Sua conexão com o PBX está boa' + (q.pbxMs == null ? '' : ' (' + q.pbxMs + ' ms)') + ': o problema é do outro lado' + (q.perda ? ', que está perdendo ' + q.perda + '% do áudio' : '') + '.']
+  return '<div class="alerta" role="status" id="cp-qualidade">' + ic('signal') + '<div><b>' + titulo + '</b><span>' + texto + '</span></div></div>'
+}
+function mostraQualidade (a) {
+  const c = state.call
+  if (!daChamada(a.id) || c.kind !== 'active') return
+  const antes = alertaQualidade(c.qualidade)
+  c.qualidade = a
+  // O aviso mudou: desenha o painel de novo; senao, so as barras (o resto fica como esta).
+  if (antes !== alertaQualidade(a) && state.view === 'chamadas' && state.panel === 'call') { renderLeft(); return }
+  const b = $('#cp-barras'); if (b) b.outerHTML = barras(a)
+}
+
 // A voz: o pico (0 a 32767) na escala do ouvido, de -48 dBFS (nada) a -10 dBFS (cheio). Sobe na hora e desce
 // devagar, como um medidor.
 const nivelDe = p => p > 0 ? Math.min(1, Math.max(0, (20 * Math.log10(p / 32768) + 48) / 38)) : 0
@@ -366,7 +391,8 @@ function callPanel (c) {
   else if (c.semSom && c.micMudo) alerta = '<div class="alerta" role="status">' + ic('micoff') + '<div><b>Seu microfone está mudo</b><span>Está mudo no sistema (ou com o volume em zero).</span></div><button type="button" class="btn sm prim" data-act="tira-do-mudo">Tirar do mudo</button></div>'
   else if (c.semSom && outra) alerta = '<div class="alerta" role="status">' + ic('micoff') + '<div><b>Não te ouço</b><span>' + esc(outra.nome) + ' está captando som. Usar esse?</span></div><button type="button" class="btn sm prim" data-act="usa-microfone" data-v="' + esc(outra.id) + '">Usar</button>' + trocar + '</div>'
   else if (c.semSom) alerta = '<div class="alerta" role="status">' + ic('micoff') + '<div><b>Não te ouço</b><span>O microfone está mandando silêncio. Quer testar outro?</span></div>' + trocar + '</div>'
-  return '<div class="cp">' + who + '<div><div class="cp-timer' + (conectou ? ' fx-entra' : '') + '" id="cp-timer">' + fmt((Date.now() - c.t0) / 1000) + '</div><div class="cp-q">' + ic('signal') + esc(c.codec || 'G.711') + ' · 8 kHz' + notas + '</div></div>' + alerta +
+  else alerta = alertaQualidade(c.qualidade)
+  return '<div class="cp">' + who + '<div><div class="cp-timer' + (conectou ? ' fx-entra' : '') + '" id="cp-timer">' + fmt((Date.now() - c.t0) / 1000) + '</div><div class="cp-q">' + barras(c.qualidade) + esc(c.codec || 'G.711') + ' · 8 kHz' + notas + '</div></div>' + alerta +
     '<div class="cp-grid">' +
     '<button type="button" class="cpb" data-act="mute" aria-pressed="' + !!c.muted + '">' + ic(c.muted ? 'micoff' : 'mic') + 'Mudo<span class="nivel-mic" id="nivel-mic" aria-hidden="true"></span></button>' +
     '<button type="button" class="cpb" data-act="hold" aria-pressed="' + !!c.held + '">' + ic('pause') + 'Espera</button>' +
@@ -948,6 +974,7 @@ function recebe (a) {
       break
     case 'nivel': mostraNivel(a); break
     case 'voz': mostraVoz(a); break
+    case 'qualidade': mostraQualidade(a); break
     case 'microfone':
       if (daChamada(a.id)) {
         state.call.semSom = a.silencio

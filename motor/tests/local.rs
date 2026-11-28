@@ -153,6 +153,10 @@ async fn liga_atende_fala_e_desliga() {
     let (nosso, deles) = a.niveis(&id).unwrap();
     assert!((9000..10500).contains(&nosso), "nosso {nosso}");
     assert!((8000..11000).contains(&deles), "deles {deles}");
+    // O que chegou: uns 50 pacotes por segundo, sem perda no 127.0.0.1.
+    let c = a.chegada(&id).unwrap();
+    assert!(c.esperados >= 50, "esperados {}", c.esperados);
+    assert!(c.recebidos >= c.esperados, "{c:?}");
     a.mudo(&id, true).unwrap();
     tokio::time::sleep(Duration::from_millis(100)).await;
     let _ = a.niveis(&id).unwrap();

@@ -182,10 +182,10 @@ aprender o fundo em meio segundo); o ruído constante cai mais de 6 dB.
 
 ## Decisões (28/11/2026)
 
-Das ideias para a experiência que ele escolheu em 28/11: atender pelo botão do headset, o indicador de qualidade da
-ligação (dizendo se o problema é de quem recebe ou da conexão daqui com o PBX), a pausa na fila, os efeitos de
-chamada (mockup primeiro) e as três abaixo, feitas. Clicar num número em qualquer programa e o ChamadoJá na ligação
-ficam para depois.
+Das ideias para a experiência que ele escolheu em 28/11: o indicador de qualidade da ligação (dizendo se o problema
+é de quem recebe ou da conexão daqui com o PBX), a pausa na fila, os efeitos de chamada (mockup primeiro) e as
+três abaixo. Clicar num número em qualquer programa e o ChamadoJá na ligação ficam para depois. Atender pelo botão
+do headset saiu: nenhum headset deles tem o botão (28/11). Decisão dele: a próxima versão só sai com tudo pronto.
 
 - **Perdidas repetidas numa linha só** (pedido dele): as perdidas seguidas do mesmo número, do mesmo tipo (Perdida,
   Recusada, Não perturbe), da mesma conta e do mesmo dia, sem outra ligação desse número no meio, viram uma linha
@@ -227,6 +227,21 @@ ficam para depois.
   lido de 80 em 80 ms só com a janela visível. Por ora o "caiu" é a atendida que acabou em falha; o indicador de
   qualidade (rede e PBX) vai dar o motivo de verdade. Conferido no KWin virtual com o PBX falso (chegando, perdida);
   atendida, fim e caiu só no mockup.
+
+- **Qualidade da ligação** (pedido dele: dizer se é culpa de quem recebe ou da conexão daqui com o PBX, "de
+  maneira segura sem matar desempenho"): de 2 em 2 s, durante a ligação atendida, o motor diz o que chegou do outro
+  lado (esperados e recebidos pela sequência do RTP, com a volta do u16, e a variação entre chegadas; um contador
+  por pacote) e uma sonda (um OPTIONS, que vai e volta pelo caminho do áudio até o PBX) mede a resposta dele. A
+  avaliação (`nucleo::qualidade`) olha os últimos 10 s: a sonda sem resposta, a 400 ms ou mais ou espalhada em 200
+  ms é a conexão daqui (ruim; a 200/100 ms, fraca); a sonda boa com perda de 5% ou mais, variação de 80 ms ou mais
+  ou uma janela sem áudio é do outro lado (2% e 40 ms, fraca). Na espera, de qualquer lado, não mede. Na tela: três
+  barras no lugar do ícone de sinal (a dica traz perda, variação e o tempo do PBX) e, quando não está boa, o aviso
+  "Sua conexão com o PBX está instável" ou "O áudio está chegando picotado… o problema é do outro lado"; o "caiu"
+  diz se a conexão daqui estava instável. Testado com os casos na lógica pura e o motor contando sem perda no
+  127.0.0.1; **falta a bancada no PBX** para calibrar os limites (uma ligação boa, uma com perda daqui).
+- **Pausa na fila**: espera o código da Fasterisk (se é um código que alterna ou dois, um para pausar e outro para
+  voltar, e se vale para todas as filas). Não há nada público deles; o comum no Asterisk é um código como o *46,
+  mas testar no escuro mexeria na fila de verdade.
 
 ## Backlog do Windows
 

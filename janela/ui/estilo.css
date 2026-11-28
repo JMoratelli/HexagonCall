@@ -491,6 +491,16 @@ input[type="range"] { width: 180px; max-width: 100%; accent-color: var(--primary
 .selo.fx-pop { display: inline-grid; }
 @keyframes pop { 35% { transform: scale(1.45); } }
 
+/* A qualidade da ligacao: tres barras no lugar do icone de sinal (cinza enquanto mede) */
+.barras { display: inline-flex; align-items: flex-end; gap: 2px; height: 12px; }
+.barras i { width: 3px; border-radius: 1px; background: color-mix(in srgb, var(--muted-fg) 35%, transparent); }
+.barras i:nth-child(1) { height: 5px; }
+.barras i:nth-child(2) { height: 8px; }
+.barras i:nth-child(3) { height: 11px; }
+.barras.n3 i { background: var(--ok); }
+.barras.n2 i:nth-child(-n+2) { background: var(--warn); }
+.barras.n1 i:nth-child(1) { background: var(--crit); }
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }

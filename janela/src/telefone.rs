@@ -150,6 +150,8 @@ struct Chamada {
     atendida_em: Option<u64>,
     mudo: bool,
     espera: bool,
+    /// O outro lado pos em espera.
+    espera_deles: bool,
     /// Microfone ou alto-falante que nao abriu nesta ligacao.
     faltando: Faltando,
     /// O arquivo da gravacao, se esta gravando.
@@ -317,6 +319,21 @@ pub enum Aviso {
         id: String,
         eu: u16,
         ele: u16,
+    },
+    /// A qualidade da ligacao atendida, de 2 em 2 s (`nucleo::qualidade`).
+    Qualidade {
+        id: String,
+        /// 3 boa, 2 fraca, 1 ruim.
+        nivel: u8,
+        /// "aqui" (a conexao com o PBX) ou "la" (o outro lado).
+        culpa: Option<&'static str>,
+        /// A perda do que chega, em por cento.
+        perda: u32,
+        #[serde(rename = "variacaoMs")]
+        variacao_ms: u32,
+        /// A resposta mais lenta da sonda nos ultimos 10 s; None se faltou uma.
+        #[serde(rename = "pbxMs")]
+        pbx_ms: Option<u32>,
     },
     /// As perdidas que ninguem viu ainda (0: foram vistas).
     Perdidas {
@@ -1071,6 +1088,9 @@ impl Telefone {
                     let tel = Arc::clone(&self);
                     let falando = id.clone();
                     tauri::async_runtime::spawn(async move { tel.mostra_a_voz(falando).await });
+                    let tel = Arc::clone(&self);
+                    let medida = id.clone();
+                    tauri::async_runtime::spawn(async move { tel.mede_qualidade(medida).await });
                     let faltando = trava(&self.chamadas)
                         .get(&id)
                         .map(|c| c.faltando.clone())
@@ -1088,7 +1108,12 @@ impl Telefone {
                         });
                     }
                 }
-                Evento::Espera { id, sim } => self.avisa(Aviso::Espera { id, sim }),
+                Evento::Espera { id, sim } => {
+                    if let Some(c) = trava(&self.chamadas).get_mut(&id) {
+                        c.espera_deles = sim;
+                    }
+                    self.avisa(Aviso::Espera { id, sim });
+                }
                 Evento::Encerrada { id, fim, .. } => {
                     self.notificacoes.fecha(&id);
                     if trava(&self.chamadas)
@@ -1183,6 +1208,70 @@ impl Telefone {
                     alternativas,
                 });
             }
+        }
+    }
+
+    /// A qualidade da ligacao, de 2 em 2 s, enquanto ela durar: o que chegou do
+    /// outro lado na janela e a sonda do PBX (um OPTIONS, que vai e volta pelo
+    /// caminho do audio ate ele). Na espera, de qualquer lado, nao mede: o audio
+    /// para de proposito.
+    async fn mede_qualidade(self: Arc<Self>, id: String) {
+        use nucleo::qualidade::{Culpa, JANELAS, Janela, avalia};
+        let mut janelas: std::collections::VecDeque<Janela> = std::collections::VecDeque::new();
+        let mut antes: Option<motor::midia::Chegada> = None;
+        loop {
+            let ciclo = Instant::now();
+            let Ok(ua) = self.ua_da_chamada(&id) else {
+                return;
+            };
+            let pbx_ms = ua
+                .sonda(Duration::from_millis(1500))
+                .await
+                .ok()
+                .map(|t| u32::try_from(t.as_millis()).unwrap_or(u32::MAX));
+            tokio::time::sleep(Duration::from_secs(2).saturating_sub(ciclo.elapsed())).await;
+            let Some(em_espera) = trava(&self.chamadas)
+                .get(&id)
+                .map(|c| c.espera || c.espera_deles)
+            else {
+                return;
+            };
+            let Ok(agora) = ua.chegada(&id) else {
+                return;
+            };
+            let Some(anterior) = antes.replace(agora) else {
+                continue;
+            };
+            if em_espera {
+                janelas.clear();
+                continue;
+            }
+            janelas.push_back(Janela {
+                esperados: agora.esperados.wrapping_sub(anterior.esperados),
+                recebidos: agora.recebidos.wrapping_sub(anterior.recebidos),
+                variacao_ms: agora.variacao_ms,
+                pbx_ms,
+            });
+            while janelas.len() > JANELAS {
+                janelas.pop_front();
+            }
+            let Some(a) = avalia(janelas.make_contiguous()) else {
+                continue;
+            };
+            if a.nivel < 3 {
+                debug!(%id, ?a, "qualidade da ligacao");
+            }
+            self.avisa(Aviso::Qualidade {
+                id: id.clone(),
+                nivel: a.nivel,
+                culpa: a.culpa.map(|c| match c {
+                    Culpa::Aqui => "aqui",
+                    Culpa::La => "la",
+                }),
+                perda: a.perda,
+                variacao_ms: a.variacao_ms,
+                pbx_ms: a.pbx_ms,
+            });
         }
     }
 
@@ -1330,6 +1419,7 @@ impl Telefone {
                 atendida_em: None,
                 mudo: false,
                 espera: false,
+                espera_deles: false,
                 faltando: Faltando::default(),
                 gravacao: None,
                 referencia: None,
@@ -1559,6 +1649,7 @@ impl Telefone {
                 atendida_em: None,
                 mudo: false,
                 espera: false,
+                espera_deles: false,
                 faltando: a.faltando,
                 gravacao: None,
                 referencia: Some(a.referencia),

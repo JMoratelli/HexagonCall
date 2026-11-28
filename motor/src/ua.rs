@@ -1082,6 +1082,19 @@ impl Ua {
         Ok(())
     }
 
+    /// O que chegou do outro lado desde o comeco da ligacao (a qualidade ao
+    /// vivo).
+    pub fn chegada(&self, id: &str) -> Result<crate::midia::Chegada, Erro> {
+        let ligacoes = trava(&self.ligacoes);
+        let sessao = ligacoes
+            .get(id)
+            .ok_or_else(|| Erro::SemLigacao(id.to_string()))?
+            .sessao
+            .as_ref()
+            .ok_or_else(|| Erro::EstadoErrado(id.to_string()))?;
+        Ok(sessao.chegada())
+    }
+
     /// O pico da voz de cada lado desde a ultima leitura (nosso, deles), de 0
     /// a 32767: a tela mostra quem esta falando.
     pub fn niveis(&self, id: &str) -> Result<(u16, u16), Erro> {

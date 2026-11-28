@@ -10,5 +10,6 @@ pub mod g711;
 pub mod jitter;
 pub mod ligacao;
 pub mod presenca;
+pub mod qualidade;
 pub mod rtp;
 pub mod sdp;

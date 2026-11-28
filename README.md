@@ -45,6 +45,7 @@ O núcleo foi testado contra um PBX de verdade (Asterisk 13 com chan_sip), e a j
 | Instalação em massa: `ocultaConfig = 1` tira da tela as contas e quase todas as opções, que vêm dos arquivos | na janela |
 | Perdidas à vista: o ponto vermelho no ícone da bandeja (com quantas na dica), o número na barra de tarefas e o aviso com "Ligar de volta", um por número; zeram quando alguém mexe na tela em Chamadas. No histórico, as perdidas repetidas do mesmo número viram uma linha com o selo de quantas foram | na janela, com um PBX falso; o aviso e o sobreposto do Windows ainda não vistos no Windows |
 | Fila, grupo de ramais e siga-me sem "Offline": o PBX manda para a fila o mesmo "Not online" do aparelho desligado, então o número que tocou com a presença Offline deixa de mostrar Offline (`sem-presenca.txt`) | nos testes locais |
+| Qualidade da ligação ao vivo: três barras e, quando piora, de quem é o problema (a conexão daqui com o PBX, pela sonda de 2 em 2 s, ou o outro lado, pela perda e a variação do que chega) | nos testes locais; falta calibrar no PBX |
 | Efeitos de chamada no padrão da colmeia: o favo em volta de quem liga, as ondas enquanto toca, o favo respirando com a voz do outro lado (e a sua no botão Mudo), o fim e a ligação que caiu | na janela |
 | Status no alto da janela: Disponível ou Não perturbe (recusa como ocupado, 486; fica no histórico), a conexão de cada conta e o Reconectar | na janela, com um PBX falso |
 | Instalador do Windows e atualização sozinha (releases do GitHub, conferida por sha256) | testado no Windows 10 |

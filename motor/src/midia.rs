@@ -254,6 +254,25 @@ struct Niveis {
     deles: AtomicU32,
 }
 
+/// O que chegou do outro lado ate agora (`qualidade::Contagem` e a variacao),
+/// para a qualidade da ligacao ao vivo: quem le guarda o anterior e faz a
+/// diferenca.
+#[derive(Default)]
+struct Recepcao {
+    esperados: AtomicU32,
+    recebidos: AtomicU32,
+    variacao_ms: AtomicU32,
+}
+
+/// O que chegou do outro lado desde o comeco da ligacao.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct Chegada {
+    pub esperados: u32,
+    pub recebidos: u32,
+    /// A variacao entre chegadas agora, em ms.
+    pub variacao_ms: u32,
+}
+
 /// O que a ligacao muda de fora no laco do audio.
 #[derive(Clone)]
 struct Controles {
@@ -263,6 +282,7 @@ struct Controles {
     tons: Tons,
     gravacao: Gravacao,
     niveis: Arc<Niveis>,
+    recepcao: Arc<Recepcao>,
 }
 
 /// A maior amplitude do quadro.
@@ -314,6 +334,7 @@ impl Sessao {
             tons: Arc::default(),
             gravacao: Arc::default(),
             niveis: Arc::default(),
+            recepcao: Arc::default(),
         };
         let tarefa = tokio::spawn(laco(
             socket,
@@ -365,6 +386,16 @@ impl Sessao {
 
     pub fn mudo(&self, sim: bool) {
         self.controles.mudo.store(sim, Ordering::Relaxed);
+    }
+
+    /// O que chegou do outro lado desde o comeco.
+    pub fn chegada(&self) -> Chegada {
+        let r = &self.controles.recepcao;
+        Chegada {
+            esperados: r.esperados.load(Ordering::Relaxed),
+            recebidos: r.recebidos.load(Ordering::Relaxed),
+            variacao_ms: r.variacao_ms.load(Ordering::Relaxed),
+        }
     }
 
     /// O pico do que saiu (ja com o mudo) e do que tocou aqui desde a ultima
@@ -431,7 +462,9 @@ async fn laco(
         tons,
         gravacao,
         niveis,
+        recepcao,
     } = controles;
+    let mut contagem = nucleo::qualidade::Contagem::default();
     let mut tom: Option<TomEmCurso> = None;
     let mut pausa: u16 = 0;
     let Rumo {
@@ -566,6 +599,11 @@ async fn laco(
                         let chegada = u32::try_from(inicio.elapsed().as_micros() / 125).unwrap_or(u32::MAX);
                         variacao.chegou(chegada, cab.carimbo);
                         jitter.insere(cab.sequencia, decodifica(codec, carga_recebida));
+                        contagem.chegou(cab.sequencia);
+                        recepcao.esperados.store(contagem.esperados, Ordering::Relaxed);
+                        recepcao.recebidos.store(contagem.recebidos, Ordering::Relaxed);
+                        let ms = u32::try_from(variacao.ms(TAXA).0).unwrap_or(u32::MAX);
+                        recepcao.variacao_ms.store(ms, Ordering::Relaxed);
                     }
                     Ok(_) => estatistica.outros += 1,
                     Err(_) => estatistica.invalidos += 1,
